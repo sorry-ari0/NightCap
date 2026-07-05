@@ -1,5 +1,6 @@
 import express from "express";
 import { fallbackVenues } from "./fallbackVenues.js";
+import { loadState, saveState } from "./store.js";
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -7,8 +8,25 @@ const googleKey = process.env.GOOGLE_MAPS_API_KEY;
 
 app.use(express.json({ limit: "1mb" }));
 
-const ratings = [];
-const savedVenueIds = new Set();
+const state = loadState();
+const ratings = state.ratings;
+const savedVenueIds = new Set(state.savedVenueIds);
+const invites = state.invites;
+
+const unlocks = [
+  { id: "friend-match", label: "Friend match scores", requiredInvites: 1 },
+  { id: "group-planner", label: "Group planner", requiredInvites: 2 },
+  { id: "city-scores", label: "City average scores", requiredInvites: 3 },
+  { id: "stealth-mode", label: "Private mode", requiredInvites: 4 }
+];
+
+function persist() {
+  saveState({
+    ratings,
+    savedVenueIds: Array.from(savedVenueIds),
+    invites
+  });
+}
 
 function toVenue(place, city) {
   const photoName = place.photos?.[0]?.name;
@@ -168,24 +186,55 @@ app.post("/api/ratings", (req, res) => {
   }
 
   ratings.push(rating);
+  persist();
   res.status(201).json({ rating });
 });
 
 app.post("/api/saved-venues", (req, res) => {
   if (!req.body.venueId) return res.status(400).json({ error: "venueId is required" });
-  savedVenueIds.add(req.body.venueId);
+  if (savedVenueIds.has(req.body.venueId)) {
+    savedVenueIds.delete(req.body.venueId);
+  } else {
+    savedVenueIds.add(req.body.venueId);
+  }
+  persist();
   res.status(201).json({ savedVenueIds: Array.from(savedVenueIds) });
 });
 
 app.delete("/api/saved-venues/:venueId", (req, res) => {
   savedVenueIds.delete(req.params.venueId);
+  persist();
   res.json({ savedVenueIds: Array.from(savedVenueIds) });
+});
+
+app.get("/api/progress", (req, res) => {
+  res.json(progressPayload());
+});
+
+app.post("/api/invites", (req, res) => {
+  const contact = String(req.body.contact || "").trim();
+  if (!contact) return res.status(400).json({ error: "contact is required" });
+
+  const normalized = contact.toLowerCase();
+  const existing = invites.find((invite) => invite.normalized === normalized);
+  if (!existing) {
+    invites.push({
+      id: `invite-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      contact,
+      normalized,
+      createdAt: new Date().toISOString()
+    });
+    persist();
+  }
+
+  res.status(201).json(progressPayload());
 });
 
 app.post("/api/plans", (req, res) => {
   const venues = req.body.venues ?? [];
   const groupSize = Number(req.body.groupSize || 2);
   const priorities = req.body.priorities ?? [];
+  const hasGroupPlanner = invites.length >= 2;
 
   const ranked = venues
     .map((venue) => {
@@ -196,11 +245,14 @@ app.post("/api/plans", (req, res) => {
     .slice(0, 3);
 
   res.json({
+    lockedFeatures: {
+      groupPlanner: !hasGroupPlanner
+    },
     plan: ranked.map((venue, index) => ({
       stop: index + 1,
       venue,
       role: index === 0 ? "Start here" : index === 1 ? "Main move" : "Late-night backup",
-      reason: reasonForVenue(venue, priorities)
+      reason: reasonForVenue(venue, priorities, hasGroupPlanner)
     }))
   });
 });
@@ -215,15 +267,32 @@ function plannerScore(venue, priorities, groupSize) {
   const selected = priorities.map((priority) => categoryScores[priority]).filter(Number.isFinite);
   const categoryAverage = selected.length ? average(selected) : 7;
   const socialBoost = venue.ratingCount ? Math.min(1.2, venue.ratingCount * 0.2) : 0;
+  const savedBoost = savedVenueIds.has(venue.id) ? 0.4 : 0;
   const groupPenalty = groupSize >= 6 && venue.types?.includes("night_club") ? 0.2 : 0;
-  return Math.round(((venue.overallScore ?? categoryAverage ?? 7) + categoryAverage + socialBoost - groupPenalty) * 10) / 10;
+  return Math.round(((venue.overallScore ?? categoryAverage ?? 7) + categoryAverage + socialBoost + savedBoost - groupPenalty) * 10) / 10;
 }
 
-function reasonForVenue(venue, priorities) {
+function reasonForVenue(venue, priorities, hasGroupPlanner) {
   const readable = priorities.length ? priorities.join(", ") : "overall fit";
-  if (venue.ratingCount) return `Strong ${readable} signal from ${venue.ratingCount} rating${venue.ratingCount === 1 ? "" : "s"}.`;
+  const unlockNote = hasGroupPlanner ? " Group planning is unlocked." : " Invite one more friend to unlock group planning.";
+  if (venue.ratingCount) return `Strong ${readable} signal from ${venue.ratingCount} rating${venue.ratingCount === 1 ? "" : "s"}.${unlockNote}`;
   if (venue.googleRating) return `Good Maps baseline (${venue.googleRating}) while the local rating graph fills in.`;
   return "Included as a seed spot so the planner works before map data is connected.";
+}
+
+function progressPayload() {
+  const inviteCount = invites.length;
+  return {
+    inviteCount,
+    ratingCount: ratings.length,
+    savedCount: savedVenueIds.size,
+    unlocks: unlocks.map((unlock) => ({
+      ...unlock,
+      unlocked: inviteCount >= unlock.requiredInvites,
+      remaining: Math.max(0, unlock.requiredInvites - inviteCount)
+    })),
+    recentInvites: invites.slice(-4).reverse()
+  };
 }
 
 app.listen(port, () => {

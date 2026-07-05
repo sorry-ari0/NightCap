@@ -103,7 +103,8 @@ h1 {
 }
 
 .controls,
-.workspace {
+.workspace,
+.onboarding {
   max-width: 1480px;
   margin: 20px auto 0;
 }
@@ -116,6 +117,69 @@ h1 {
   border: 1px solid #ded6c7;
   border-radius: 8px;
   background: #fffaf1;
+}
+
+.onboarding {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 360px;
+  gap: 14px;
+  align-items: stretch;
+  padding: 16px;
+  border: 1px solid #ded6c7;
+  border-radius: 8px;
+  background: #fffaf1;
+}
+
+.onboarding-copy h2 {
+  margin-bottom: 8px;
+  font-size: 26px;
+}
+
+.onboarding-copy p:last-child {
+  max-width: 740px;
+  margin-bottom: 0;
+  color: #5f574e;
+  line-height: 1.45;
+}
+
+.invite-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 10px;
+  align-items: end;
+}
+
+.unlock-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.unlock-card {
+  min-height: 84px;
+  display: grid;
+  align-content: space-between;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #ddd2c1;
+  border-radius: 8px;
+  background: #f1ebdf;
+}
+
+.unlock-card.active {
+  border-color: #95ae52;
+  background: #e4f0c5;
+}
+
+.unlock-card strong {
+  font-size: 14px;
+}
+
+.unlock-card span {
+  color: #6b6258;
+  font-size: 12px;
+  font-weight: 750;
 }
 
 label {
@@ -218,6 +282,28 @@ button:disabled {
 .section-heading h2 {
   margin: 0;
   font-size: 20px;
+}
+
+.progress-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.progress-strip span {
+  padding: 9px 8px;
+  border-radius: 8px;
+  background: #eee7da;
+  color: #5f574e;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.progress-strip b {
+  display: block;
+  color: #171717;
+  font-size: 18px;
 }
 
 .source {
@@ -438,7 +524,13 @@ button:disabled {
 
   .hero-panel,
   .controls,
-  .workspace {
+  .workspace,
+  .onboarding,
+  .unlock-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .invite-form {
     grid-template-columns: 1fr;
   }
 

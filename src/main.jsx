@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bookmark, CalendarClock, MapPin, MessageSquare, Search, SlidersHorizontal, Sparkles, Star, Users } from "lucide-react";
+import { Bookmark, CalendarClock, Lock, MapPin, MessageSquare, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
 import "./styles.css";
 
 const categories = [
@@ -24,6 +24,8 @@ function App() {
   const [priorities, setPriorities] = useState(["vibes", "people"]);
   const [groupSize, setGroupSize] = useState(4);
   const [plan, setPlan] = useState([]);
+  const [progress, setProgress] = useState(null);
+  const [inviteContact, setInviteContact] = useState("");
 
   async function loadVenues() {
     setLoading(true);
@@ -35,8 +37,15 @@ function App() {
     setLoading(false);
   }
 
+  async function loadProgress() {
+    const response = await fetch("/api/progress");
+    const data = await response.json();
+    setProgress(data);
+  }
+
   useEffect(() => {
     loadVenues();
+    loadProgress();
   }, []);
 
   async function saveVenue(venue) {
@@ -45,7 +54,21 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ venueId: venue.id })
     });
-    setVenues((items) => items.map((item) => item.id === venue.id ? { ...item, saved: true } : item));
+    setVenues((items) => items.map((item) => item.id === venue.id ? { ...item, saved: !item.saved } : item));
+    await loadProgress();
+  }
+
+  async function submitInvite(event) {
+    event.preventDefault();
+    if (!inviteContact.trim()) return;
+    const response = await fetch("/api/invites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contact: inviteContact })
+    });
+    const data = await response.json();
+    setProgress(data);
+    setInviteContact("");
   }
 
   async function generatePlan() {
@@ -56,6 +79,7 @@ function App() {
     });
     const data = await response.json();
     setPlan(data.plan);
+    await loadProgress();
   }
 
   async function submitRating(payload) {
@@ -66,6 +90,7 @@ function App() {
     });
     setSelectedVenue(null);
     await loadVenues();
+    await loadProgress();
   }
 
   const topVenue = useMemo(() => {
@@ -116,11 +141,44 @@ function App() {
         </button>
       </section>
 
+      <section className="onboarding">
+        <div className="onboarding-copy">
+          <p className="eyebrow">Unlock loop</p>
+          <h2>Bring friends in to make the planner smarter.</h2>
+          <p>Invites unlock social features while ratings train the venue graph. This mirrors the Beli-style growth loop without blocking first use.</p>
+        </div>
+        <form className="invite-form" onSubmit={submitInvite}>
+          <label>
+            <span>Invite by phone or email</span>
+            <input value={inviteContact} onChange={(event) => setInviteContact(event.target.value)} placeholder="friend@example.com" />
+          </label>
+          <button className="primary" type="submit">
+            <Send size={18} />
+            Invite
+          </button>
+        </form>
+        <div className="unlock-grid">
+          {(progress?.unlocks ?? []).map((unlock) => (
+            <div className={unlock.unlocked ? "unlock-card active" : "unlock-card"} key={unlock.id}>
+              {unlock.unlocked ? <Unlock size={18} /> : <Lock size={18} />}
+              <strong>{unlock.label}</strong>
+              <span>{unlock.unlocked ? "Unlocked" : `${unlock.remaining} invite${unlock.remaining === 1 ? "" : "s"} left`}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="workspace">
         <aside className="planner">
           <div className="section-heading">
             <SlidersHorizontal size={18} />
             <h2>Planner</h2>
+          </div>
+
+          <div className="progress-strip">
+            <span><b>{progress?.inviteCount ?? 0}</b> invites</span>
+            <span><b>{progress?.ratingCount ?? 0}</b> ratings</span>
+            <span><b>{progress?.savedCount ?? 0}</b> saved</span>
           </div>
 
           <label className="range">

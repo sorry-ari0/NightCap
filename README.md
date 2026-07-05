@@ -10,6 +10,8 @@ Nightcap is a Beli-inspired nightlife planner MVP for bars, clubs, lounges, and 
 - Supports optional category ratings for vibes, drinks, people, aesthetics, music, and value.
 - Supports comments and saved venues.
 - Generates a simple three-stop night-out plan from selected priorities and group size.
+- Persists local MVP data to `data/nightcap-db.json`.
+- Adds invite-based unlock progress for friend match scores, group planner, city scores, and private mode.
 
 ## Run Locally
 
@@ -31,3 +33,7 @@ GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 ```
 
 The server uses Google Places API Text Search and Place Photos. Without a key, the app uses fallback seed venues.
+
+## Local Data
+
+The MVP stores ratings, saved venues, and invite progress in `data/nightcap-db.json`. That file is ignored by git so local testing does not leak user-generated data.
