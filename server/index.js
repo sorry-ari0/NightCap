@@ -1,10 +1,14 @@
 import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { fallbackVenues } from "./fallbackVenues.js";
 import { loadState, saveState } from "./store.js";
 
 const app = express();
 const port = process.env.PORT || 3001;
 const googleKey = process.env.GOOGLE_MAPS_API_KEY;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distPath = path.join(__dirname, "..", "dist");
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -153,6 +157,14 @@ app.get("/api/venues", async (req, res) => {
   });
 });
 
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    mapsConfigured: Boolean(googleKey),
+    storage: "local-json"
+  });
+});
+
 app.get("/api/google-photo", async (req, res) => {
   if (!googleKey || !req.query.name) {
     return res.status(404).send("Photo unavailable");
@@ -255,6 +267,12 @@ app.post("/api/plans", (req, res) => {
       reason: reasonForVenue(venue, priorities, hasGroupPlanner)
     }))
   });
+});
+
+app.use(express.static(distPath));
+
+app.get(/^(?!\/api).*/, (req, res) => {
+  res.sendFile(path.join(distPath, "index.html"));
 });
 
 function optionalNumber(value) {

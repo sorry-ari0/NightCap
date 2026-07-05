@@ -37,3 +37,29 @@ The server uses Google Places API Text Search and Place Photos. Without a key, t
 ## Local Data
 
 The MVP stores ratings, saved venues, and invite progress in `data/nightcap-db.json`. That file is ignored by git so local testing does not leak user-generated data.
+
+## Deploy For Free
+
+The fastest current deployment path is a single Render Web Service:
+
+- Build command: `npm install && npm run build`
+- Start command: `npm start`
+- Free instance type
+- Optional env var: `GOOGLE_MAPS_API_KEY`
+
+This repo includes `render.yaml` for a Render Blueprint deploy.
+
+Render's free web services spin down after idle time and use an ephemeral filesystem, so local JSON data can disappear after restarts or deploys. For real user data, move ratings, saves, invites, and users to Supabase Free Postgres next.
+
+Production server:
+
+```sh
+npm run build
+npm start
+```
+
+Health check:
+
+```sh
+curl http://localhost:3001/api/health
+```
