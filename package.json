@@ -9,16 +9,21 @@
     "start": "node server/index.js",
     "client": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "test:e2e": "playwright test",
+    "test:api": "node tests/api-validation.mjs",
+    "test:browser": "node tests/browser-audit.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.2",
     "concurrently": "^9.2.1",
     "express": "^5.2.1",
     "lucide-react": "^0.562.0",
-    "vite": "^7.3.0",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "vite": "^7.3.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
 }

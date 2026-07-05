@@ -1,6 +1,7 @@
 export const fallbackVenues = [
   {
     id: "seed-nightmoves",
+    canonicalVenueKey: "nightmoves-new-york",
     googlePlaceId: null,
     name: "Nightmoves",
     address: "Williamsburg, Brooklyn, NY",
@@ -13,6 +14,7 @@ export const fallbackVenues = [
   },
   {
     id: "seed-le-bain",
+    canonicalVenueKey: "le-bain-new-york",
     googlePlaceId: null,
     name: "Le Bain",
     address: "Meatpacking District, New York, NY",
@@ -25,6 +27,7 @@ export const fallbackVenues = [
   },
   {
     id: "seed-public-records",
+    canonicalVenueKey: "public-records-new-york",
     googlePlaceId: null,
     name: "Public Records",
     address: "Gowanus, Brooklyn, NY",
@@ -37,6 +40,7 @@ export const fallbackVenues = [
   },
   {
     id: "seed-sweet-liberty",
+    canonicalVenueKey: "sweet-liberty-miami",
     googlePlaceId: null,
     name: "Sweet Liberty",
     address: "Miami Beach, FL",
@@ -49,6 +53,7 @@ export const fallbackVenues = [
   },
   {
     id: "seed-club-space",
+    canonicalVenueKey: "club-space-miami",
     googlePlaceId: null,
     name: "Club Space",
     address: "Downtown Miami, FL",
@@ -61,6 +66,7 @@ export const fallbackVenues = [
   },
   {
     id: "seed-death-co-la",
+    canonicalVenueKey: "death-and-co-los-angeles",
     googlePlaceId: null,
     name: "Death & Co",
     address: "Arts District, Los Angeles, CA",

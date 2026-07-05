@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bookmark, CalendarClock, Lock, MapPin, MessageSquare, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
+import { AlertCircle, Bookmark, CalendarClock, Copy, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
 import "./styles.css";
 
 const categories = [
@@ -14,6 +14,14 @@ const categories = [
 
 const cityOptions = ["New York", "Miami", "Los Angeles"];
 
+function getNightcapSession() {
+  const existing = window.localStorage.getItem("nightcapSessionId");
+  if (existing) return existing;
+  const sessionId = crypto.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.localStorage.setItem("nightcapSessionId", sessionId);
+  return sessionId;
+}
+
 function App() {
   const [city, setCity] = useState("New York");
   const [vibe, setVibe] = useState("cocktail bars");
@@ -22,94 +30,158 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedVenue, setSelectedVenue] = useState(null);
   const [priorities, setPriorities] = useState(["vibes", "people"]);
-  const [groupSize, setGroupSize] = useState(4);
+  const [groupSize, setGroupSize] = useState(1);
   const [plan, setPlan] = useState([]);
   const [progress, setProgress] = useState(null);
   const [inviteContact, setInviteContact] = useState("");
+  const [health, setHealth] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [fallbackReason, setFallbackReason] = useState("");
+  const [sessionId] = useState(getNightcapSession);
+
+  async function apiFetch(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "x-nightcap-session": sessionId,
+        ...(options.headers || {})
+      }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Request failed");
+    return data;
+  }
 
   async function loadVenues() {
     setLoading(true);
-    const params = new URLSearchParams({ city, vibe });
-    const response = await fetch(`/api/venues?${params}`);
-    const data = await response.json();
-    setVenues(data.venues);
-    setSource(data.source);
-    setLoading(false);
+    setError("");
+    setNotice("");
+    try {
+      const params = new URLSearchParams({ city, vibe });
+      const data = await apiFetch(`/api/venues?${params}`);
+      setVenues(data.venues);
+      setSource(data.source);
+      setFallbackReason(data.fallbackReason || "");
+    } catch (loadError) {
+      setError(loadError.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadProgress() {
-    const response = await fetch("/api/progress");
-    const data = await response.json();
+    const data = await apiFetch("/api/progress");
     setProgress(data);
+  }
+
+  async function loadHealth() {
+    const data = await apiFetch("/api/health");
+    setHealth(data);
   }
 
   useEffect(() => {
     loadVenues();
     loadProgress();
+    loadHealth();
   }, []);
 
   async function saveVenue(venue) {
-    await fetch("/api/saved-venues", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ venueId: venue.id })
-    });
-    setVenues((items) => items.map((item) => item.id === venue.id ? { ...item, saved: !item.saved } : item));
-    await loadProgress();
+    try {
+      await apiFetch("/api/saved-venues", {
+        method: "POST",
+        body: JSON.stringify({ venueId: venue.id })
+      });
+      setVenues((items) => items.map((item) => item.id === venue.id ? { ...item, saved: !item.saved } : item));
+      setNotice(venue.saved ? "Removed from saved spots." : "Saved to your shortlist.");
+      await loadProgress();
+    } catch (saveError) {
+      setNotice("");
+      setError(saveError.message);
+    }
   }
 
   async function submitInvite(event) {
     event.preventDefault();
     if (!inviteContact.trim()) return;
-    const response = await fetch("/api/invites", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contact: inviteContact })
-    });
-    const data = await response.json();
-    setProgress(data);
-    setInviteContact("");
+    try {
+      const data = await apiFetch("/api/invites", {
+        method: "POST",
+        body: JSON.stringify({ contact: inviteContact })
+      });
+      setProgress(data);
+      setInviteContact("");
+      setError("");
+      setNotice("Invite recorded. Unlock progress updated.");
+    } catch (inviteError) {
+      setNotice("");
+      setError(inviteError.message);
+    }
   }
 
   async function generatePlan() {
-    const response = await fetch("/api/plans", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ venues, priorities, groupSize })
-    });
-    const data = await response.json();
-    setPlan(data.plan);
-    await loadProgress();
+    setError("");
+    setNotice("");
+    try {
+      const data = await apiFetch("/api/plans", {
+        method: "POST",
+        body: JSON.stringify({ venues, priorities, groupSize })
+      });
+      setPlan(data.plan);
+      await loadProgress();
+    } catch (planError) {
+      setPlan([]);
+      setError(planError.message);
+    }
+  }
+
+  async function copyPlan() {
+    if (!plan.length) return;
+    try {
+      const text = plan.map((stop) => `${stop.stop}. ${stop.role}: ${stop.venue.name}`).join("\n");
+      await navigator.clipboard?.writeText(`Nightcap plan\n${text}`);
+      setNotice("Plan copied.");
+    } catch {
+      setError("Could not copy the plan in this browser.");
+    }
   }
 
   async function submitRating(payload) {
-    await fetch("/api/ratings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    setSelectedVenue(null);
-    await loadVenues();
-    await loadProgress();
+    try {
+      await apiFetch("/api/ratings", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      setSelectedVenue(null);
+      setError("");
+      setNotice("Rating saved.");
+      await loadVenues();
+      await loadProgress();
+    } catch (ratingError) {
+      setError(ratingError.message);
+    }
   }
 
   const topVenue = useMemo(() => {
     return [...venues].sort((a, b) => (b.overallScore ?? b.googleRating ?? 0) - (a.overallScore ?? a.googleRating ?? 0))[0];
   }, [venues]);
 
+  const groupPlannerLocked = groupSize > 1 && (progress?.inviteCount ?? 0) < 2;
+
   return (
     <main className="app">
       <section className="hero">
         <div className="hero-copy">
-          <p className="eyebrow">Nightlife Planner MVP</p>
-          <h1>Rank the spots. Plan the night.</h1>
-          <p className="lede">Pull bars and clubs from Maps, then layer on real ratings for vibes, drinks, people, aesthetics, music, and comments.</p>
+          <p className="eyebrow"><Moon size={14} /> Nightcap</p>
+          <h1>Your night, ranked before it starts.</h1>
+          <p className="lede">Find the right bar, club, or late-night move from live venue data, your ratings, and the friends you bring into the graph.</p>
         </div>
         <div className="hero-panel">
           <div className="panel-stat">
             <Star size={18} />
             <span>{topVenue?.overallScore ?? topVenue?.googleRating ?? "8.7"}</span>
-            <small>top signal</small>
+            <small>best signal</small>
           </div>
           <div className="panel-stat">
             <MapPin size={18} />
@@ -124,12 +196,13 @@ function App() {
         </div>
       </section>
 
-      <section className="controls">
+      <section className="controls" aria-label="Venue search">
         <label>
           <span>City</span>
-          <select value={city} onChange={(event) => setCity(event.target.value)}>
-            {cityOptions.map((option) => <option key={option}>{option}</option>)}
-          </select>
+          <input className="city-freeform" value={city} onChange={(event) => setCity(event.target.value)} list="city-options" />
+          <datalist id="city-options">
+            {cityOptions.map((option) => <option key={option} value={option} />)}
+          </datalist>
         </label>
         <label>
           <span>Search vibe</span>
@@ -137,15 +210,28 @@ function App() {
         </label>
         <button className="primary" onClick={loadVenues} disabled={loading}>
           <Search size={18} />
-          {loading ? "Loading" : "Pull from Maps"}
+          {loading ? "Searching" : "Find spots"}
         </button>
+      </section>
+
+      {(error || notice) && (
+        <div className={error ? "banner error" : "banner"}>
+          <AlertCircle size={18} />
+          <span>{error || notice}</span>
+        </div>
+      )}
+
+      <section className="status-bar">
+        <span>{health?.mapsConfigured ? "Maps connected" : "Maps key not set, using seed venues"}</span>
+        <span>Storage: {health?.storage ?? "checking"}</span>
+        <span>{source === "google" ? "Live Google Places results" : (fallbackReason || "Demo data active")}</span>
       </section>
 
       <section className="onboarding">
         <div className="onboarding-copy">
-          <p className="eyebrow">Unlock loop</p>
-          <h2>Bring friends in to make the planner smarter.</h2>
-          <p>Invites unlock social features while ratings train the venue graph. This mirrors the Beli-style growth loop without blocking first use.</p>
+          <p className="eyebrow">Crew unlocks</p>
+          <h2>More friends, better plans.</h2>
+          <p>Invite friends to unlock group planning, match scores, city averages, and private mode. Ratings keep working from the first visit.</p>
         </div>
         <form className="invite-form" onSubmit={submitInvite}>
           <label>
@@ -170,9 +256,9 @@ function App() {
 
       <section className="workspace">
         <aside className="planner">
-          <div className="section-heading">
+          <div className="section-heading planner-title">
             <SlidersHorizontal size={18} />
-            <h2>Planner</h2>
+            <h2>Tonight</h2>
           </div>
 
           <div className="progress-strip">
@@ -198,9 +284,15 @@ function App() {
             ))}
           </div>
 
-          <button className="primary full" onClick={generatePlan}>
+          <button className="primary full" onClick={generatePlan} disabled={groupPlannerLocked}>
             <Sparkles size={18} />
-            Build tonight
+            {groupPlannerLocked ? "Unlock group planner" : "Build tonight"}
+          </button>
+          {groupPlannerLocked && <p className="helper-text">Invite two friends to build plans for groups. Solo plans are available now.</p>}
+
+          <button className="secondary full" onClick={copyPlan} disabled={!plan.length}>
+            <Copy size={18} />
+            Copy plan
           </button>
 
           <div className="plan-list">
@@ -217,7 +309,7 @@ function App() {
         <section className="venues">
           <div className="section-heading">
             <CalendarClock size={18} />
-            <h2>{city} spots</h2>
+            <h2>{city} shortlist</h2>
             <span className="source">{source === "google" ? "Google Places" : "Seed fallback"}</span>
           </div>
 
@@ -242,6 +334,7 @@ function App() {
 
 function VenueCard({ venue, onRate, onSave }) {
   const score = venue.overallScore ?? venue.googleRating;
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${venue.name} ${venue.address || venue.city}`)}`;
   return (
     <article className="venue-card">
       <div className="venue-photo" style={{ backgroundImage: `url(${venue.photoUrl || "https://images.unsplash.com/photo-1575444758702-4a6b9222336e?auto=format&fit=crop&w=1200&q=80"})` }}>
@@ -268,10 +361,16 @@ function VenueCard({ venue, onRate, onSave }) {
           <p className="comment"><MessageSquare size={14} /> {venue.recentComments[0].comment}</p>
         )}
 
-        <button className="secondary full" onClick={() => onRate(venue)}>
-          <Star size={17} />
-          Rate this spot
-        </button>
+        <div className="venue-actions">
+          <button className="secondary full" onClick={() => onRate(venue)}>
+            <Star size={17} />
+            Rate
+          </button>
+          <a className="secondary full link-button" href={mapsUrl} target="_blank" rel="noreferrer">
+            <ExternalLink size={17} />
+            Map
+          </a>
+        </div>
       </div>
     </article>
   );
@@ -281,45 +380,62 @@ function RatingModal({ venue, onClose, onSubmit }) {
   const [overallScore, setOverallScore] = useState(8);
   const [optionalScores, setOptionalScores] = useState({});
   const [comment, setComment] = useState("");
+  const titleId = useId();
+  const overallId = useId();
+  const commentId = useId();
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   function updateScore(key, value) {
     setOptionalScores((scores) => ({ ...scores, [`${key}Score`]: Number(value) }));
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
       <form
         className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit({ venueId: venue.id, overallScore, ...optionalScores, comment });
+          onSubmit({ venueId: venue.id, canonicalVenueKey: venue.canonicalVenueKey, overallScore, ...optionalScores, comment });
         }}
       >
         <div className="modal-head">
           <div>
             <p className="eyebrow">Rate venue</p>
-            <h2>{venue.name}</h2>
+            <h2 id={titleId}>{venue.name}</h2>
           </div>
           <button type="button" className="close" onClick={onClose}>Close</button>
         </div>
 
         <label className="range">
           <span>Overall: {overallScore}</span>
-          <input type="range" min="1" max="10" step="0.1" value={overallScore} onChange={(event) => setOverallScore(Number(event.target.value))} />
+          <input id={overallId} aria-label="Overall score" type="range" min="1" max="10" step="0.1" value={overallScore} onChange={(event) => setOverallScore(Number(event.target.value))} />
         </label>
 
         <div className="rating-grid">
-          {categories.map((category) => (
+          {categories.map((category, index) => (
             <label key={category.key} className="range compact">
               <span>{category.label}: {optionalScores[`${category.key}Score`] ?? "-"}</span>
-              <input type="range" min="1" max="10" step="0.1" onChange={(event) => updateScore(category.key, event.target.value)} />
+              <input id={`${titleId}-${index}`} aria-label={`${category.label} score`} type="range" min="1" max="10" step="0.1" onChange={(event) => updateScore(category.key, event.target.value)} />
             </label>
           ))}
         </div>
 
-        <label>
+        <label htmlFor={commentId}>
           <span>Comment</span>
-          <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Line was fast, crowd was fun, drinks were pricey..." />
+          <textarea id={commentId} maxLength={500} value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Line was fast, crowd was fun, drinks were pricey..." />
         </label>
 
         <button className="primary full" type="submit">Save rating</button>

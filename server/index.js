@@ -14,8 +14,17 @@ app.use(express.json({ limit: "1mb" }));
 
 const state = loadState();
 const ratings = state.ratings;
-const savedVenueIds = new Set(state.savedVenueIds);
-const invites = state.invites;
+const sessions = state.sessions;
+
+function getSession(req) {
+  const rawSessionId = String(req.get("x-nightcap-session") || "demo").trim();
+  const sessionId = rawSessionId.slice(0, 80) || "demo";
+  sessions[sessionId] ??= { savedVenueIds: [], invites: [] };
+  return {
+    id: sessionId,
+    data: sessions[sessionId]
+  };
+}
 
 const unlocks = [
   { id: "friend-match", label: "Friend match scores", requiredInvites: 1 },
@@ -27,17 +36,20 @@ const unlocks = [
 function persist() {
   saveState({
     ratings,
-    savedVenueIds: Array.from(savedVenueIds),
-    invites
+    savedVenueIds: [],
+    invites: [],
+    sessions
   });
 }
 
 function toVenue(place, city) {
   const photoName = place.photos?.[0]?.name;
+  const name = place.displayName?.text ?? "Unknown venue";
   return {
     id: `google-${place.id}`,
+    canonicalVenueKey: canonicalVenueKey(name, city),
     googlePlaceId: place.id,
-    name: place.displayName?.text ?? "Unknown venue",
+    name,
     address: place.formattedAddress ?? place.shortFormattedAddress ?? "",
     neighborhood: "",
     city,
@@ -58,7 +70,7 @@ function toVenue(place, city) {
 }
 
 function venueRatings(venueId) {
-  return ratings.filter((rating) => rating.venueId === venueId);
+  return ratings.filter((rating) => rating.venueId === venueId || rating.canonicalVenueKey === venueId);
 }
 
 function average(values) {
@@ -67,8 +79,12 @@ function average(values) {
   return Math.round((nums.reduce((sum, value) => sum + value, 0) / nums.length) * 10) / 10;
 }
 
-function withScores(venue) {
-  const venueSpecificRatings = venueRatings(venue.id);
+function withScores(venue, sessionData) {
+  const canonicalKey = venue.canonicalVenueKey || canonicalVenueKey(venue.name, venue.city);
+  const venueSpecificRatings = [
+    ...venueRatings(venue.id),
+    ...ratings.filter((rating) => rating.canonicalVenueKey === canonicalKey)
+  ].filter((rating, index, all) => all.findIndex((item) => item.id === rating.id) === index);
   const categoryScores = {
     vibes: average(venueSpecificRatings.map((rating) => rating.vibesScore)),
     drinks: average(venueSpecificRatings.map((rating) => rating.drinksScore)),
@@ -80,7 +96,8 @@ function withScores(venue) {
 
   return {
     ...venue,
-    saved: savedVenueIds.has(venue.id),
+    canonicalVenueKey: canonicalKey,
+    saved: sessionData.savedVenueIds.includes(venue.id),
     overallScore: average(venueSpecificRatings.map((rating) => rating.overallScore)),
     ratingCount: venueSpecificRatings.length,
     categoryScores,
@@ -133,6 +150,7 @@ async function googleTextSearch(query, city) {
 }
 
 app.get("/api/venues", async (req, res) => {
+  const { data: sessionData } = getSession(req);
   const city = String(req.query.city || "New York").trim();
   const vibe = String(req.query.vibe || "").trim();
 
@@ -140,7 +158,7 @@ app.get("/api/venues", async (req, res) => {
     try {
       const query = [vibe, "bars clubs nightlife", city].filter(Boolean).join(" ");
       const venues = await googleTextSearch(query, city);
-      return res.json({ source: "google", venues: venues.map(withScores) });
+      return res.json({ source: "google", fallbackReason: null, venues: venues.map((venue) => withScores(venue, sessionData)) });
     } catch (error) {
       console.error(error);
     }
@@ -153,7 +171,8 @@ app.get("/api/venues", async (req, res) => {
 
   res.json({
     source: "seed",
-    venues: (venues.length ? venues : fallbackVenues).map(withScores)
+    fallbackReason: googleKey ? "Google Places failed, using seed venues." : "GOOGLE_MAPS_API_KEY is not configured.",
+    venues: (venues.length ? venues : fallbackVenues).map((venue) => withScores(venue, sessionData))
   });
 });
 
@@ -179,23 +198,38 @@ app.get("/api/google-photo", async (req, res) => {
 });
 
 app.post("/api/ratings", (req, res) => {
+  const { id: sessionId } = getSession(req);
+  const overallScore = scoreValue(req.body.overallScore);
+  const optionalScores = {
+    vibesScore: scoreValue(req.body.vibesScore, true),
+    drinksScore: scoreValue(req.body.drinksScore, true),
+    peopleScore: scoreValue(req.body.peopleScore, true),
+    aestheticsScore: scoreValue(req.body.aestheticsScore, true),
+    musicScore: scoreValue(req.body.musicScore, true),
+    valueScore: scoreValue(req.body.valueScore, true)
+  };
+  if (!req.body.venueId || overallScore === null) {
+    return res.status(400).json({ error: "venueId and overallScore from 1 to 10 are required" });
+  }
+
+  const invalidOptionalScore = Object.entries(optionalScores).some(([key, value]) => {
+    return req.body[key] !== undefined && req.body[key] !== null && req.body[key] !== "" && value === null;
+  });
+
+  if (invalidOptionalScore) {
+    return res.status(400).json({ error: "category scores must be from 1 to 10" });
+  }
+
   const rating = {
     id: `rating-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    venueId: req.body.venueId,
-    overallScore: Number(req.body.overallScore),
-    vibesScore: optionalNumber(req.body.vibesScore),
-    drinksScore: optionalNumber(req.body.drinksScore),
-    peopleScore: optionalNumber(req.body.peopleScore),
-    aestheticsScore: optionalNumber(req.body.aestheticsScore),
-    musicScore: optionalNumber(req.body.musicScore),
-    valueScore: optionalNumber(req.body.valueScore),
-    comment: String(req.body.comment || "").trim(),
+    sessionId,
+    venueId: String(req.body.venueId).slice(0, 140),
+    canonicalVenueKey: String(req.body.canonicalVenueKey || "").slice(0, 180),
+    overallScore,
+    ...optionalScores,
+    comment: String(req.body.comment || "").trim().slice(0, 500),
     createdAt: new Date().toISOString()
   };
-
-  if (!rating.venueId || !Number.isFinite(rating.overallScore)) {
-    return res.status(400).json({ error: "venueId and overallScore are required" });
-  }
 
   ratings.push(rating);
   persist();
@@ -203,34 +237,39 @@ app.post("/api/ratings", (req, res) => {
 });
 
 app.post("/api/saved-venues", (req, res) => {
+  const { data: sessionData } = getSession(req);
   if (!req.body.venueId) return res.status(400).json({ error: "venueId is required" });
-  if (savedVenueIds.has(req.body.venueId)) {
-    savedVenueIds.delete(req.body.venueId);
+  const venueId = String(req.body.venueId).slice(0, 140);
+  if (sessionData.savedVenueIds.includes(venueId)) {
+    sessionData.savedVenueIds = sessionData.savedVenueIds.filter((id) => id !== venueId);
   } else {
-    savedVenueIds.add(req.body.venueId);
+    sessionData.savedVenueIds.push(venueId);
   }
   persist();
-  res.status(201).json({ savedVenueIds: Array.from(savedVenueIds) });
+  res.status(201).json({ savedVenueIds: sessionData.savedVenueIds });
 });
 
 app.delete("/api/saved-venues/:venueId", (req, res) => {
-  savedVenueIds.delete(req.params.venueId);
+  const { data: sessionData } = getSession(req);
+  sessionData.savedVenueIds = sessionData.savedVenueIds.filter((id) => id !== req.params.venueId);
   persist();
-  res.json({ savedVenueIds: Array.from(savedVenueIds) });
+  res.json({ savedVenueIds: sessionData.savedVenueIds });
 });
 
 app.get("/api/progress", (req, res) => {
-  res.json(progressPayload());
+  const { id: sessionId, data: sessionData } = getSession(req);
+  res.json(progressPayload(sessionId, sessionData));
 });
 
 app.post("/api/invites", (req, res) => {
-  const contact = String(req.body.contact || "").trim();
-  if (!contact) return res.status(400).json({ error: "contact is required" });
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const contact = String(req.body.contact || "").trim().slice(0, 120);
+  if (!contact || !isValidInviteContact(contact)) return res.status(400).json({ error: "valid phone or email is required" });
 
   const normalized = contact.toLowerCase();
-  const existing = invites.find((invite) => invite.normalized === normalized);
+  const existing = sessionData.invites.find((invite) => invite.normalized === normalized);
   if (!existing) {
-    invites.push({
+    sessionData.invites.push({
       id: `invite-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       contact,
       normalized,
@@ -239,14 +278,31 @@ app.post("/api/invites", (req, res) => {
     persist();
   }
 
-  res.status(201).json(progressPayload());
+  res.status(201).json(progressPayload(sessionId, sessionData));
 });
 
 app.post("/api/plans", (req, res) => {
-  const venues = req.body.venues ?? [];
+  const { id: sessionId, data: sessionData } = getSession(req);
+  if (!Array.isArray(req.body.venues)) return res.status(400).json({ error: "venues must be an array" });
+  const venues = req.body.venues;
   const groupSize = Number(req.body.groupSize || 2);
-  const priorities = req.body.priorities ?? [];
-  const hasGroupPlanner = invites.length >= 2;
+  const validPriorities = ["vibes", "drinks", "people", "aesthetics", "music", "value"];
+  const priorities = Array.isArray(req.body.priorities)
+    ? req.body.priorities.filter((priority) => validPriorities.includes(priority))
+    : [];
+  const hasGroupPlanner = sessionData.invites.length >= 2;
+
+  if (!Number.isFinite(groupSize) || groupSize < 1 || groupSize > 12) {
+    return res.status(400).json({ error: "groupSize must be between 1 and 12" });
+  }
+
+  if (groupSize > 1 && !hasGroupPlanner) {
+    return res.status(403).json({
+      error: "Invite two friends to unlock group planning.",
+      lockedFeatures: { groupPlanner: true },
+      progress: progressPayload(sessionId, sessionData)
+    });
+  }
 
   const ranked = venues
     .map((venue) => {
@@ -280,12 +336,19 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function scoreValue(value, optional = false) {
+  if ((value === undefined || value === null || value === "") && optional) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 1 || number > 10) return null;
+  return Math.round(number * 10) / 10;
+}
+
 function plannerScore(venue, priorities, groupSize) {
   const categoryScores = venue.categoryScores ?? {};
   const selected = priorities.map((priority) => categoryScores[priority]).filter(Number.isFinite);
   const categoryAverage = selected.length ? average(selected) : 7;
   const socialBoost = venue.ratingCount ? Math.min(1.2, venue.ratingCount * 0.2) : 0;
-  const savedBoost = savedVenueIds.has(venue.id) ? 0.4 : 0;
+  const savedBoost = venue.saved ? 0.4 : 0;
   const groupPenalty = groupSize >= 6 && venue.types?.includes("night_club") ? 0.2 : 0;
   return Math.round(((venue.overallScore ?? categoryAverage ?? 7) + categoryAverage + socialBoost + savedBoost - groupPenalty) * 10) / 10;
 }
@@ -298,19 +361,43 @@ function reasonForVenue(venue, priorities, hasGroupPlanner) {
   return "Included as a seed spot so the planner works before map data is connected.";
 }
 
-function progressPayload() {
-  const inviteCount = invites.length;
+function progressPayload(sessionId, sessionData) {
+  const inviteCount = sessionData.invites.length;
   return {
+    sessionId,
     inviteCount,
-    ratingCount: ratings.length,
-    savedCount: savedVenueIds.size,
+    ratingCount: ratings.filter((rating) => rating.sessionId === sessionId).length,
+    savedCount: sessionData.savedVenueIds.length,
     unlocks: unlocks.map((unlock) => ({
       ...unlock,
       unlocked: inviteCount >= unlock.requiredInvites,
       remaining: Math.max(0, unlock.requiredInvites - inviteCount)
     })),
-    recentInvites: invites.slice(-4).reverse()
+    recentInvites: sessionData.invites.slice(-4).reverse()
   };
+}
+
+function isValidInviteContact(contact) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact) || /^\+?[0-9().\-\s]{7,}$/.test(contact);
+}
+
+function canonicalVenueKey(name, city) {
+  return `${name}-${city}`
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+if (process.env.NODE_ENV === "test") {
+  app.post("/api/test/reset", (req, res) => {
+    ratings.splice(0, ratings.length);
+    for (const key of Object.keys(sessions)) delete sessions[key];
+    persist();
+    res.json({ ok: true });
+  });
 }
 
 app.listen(port, () => {

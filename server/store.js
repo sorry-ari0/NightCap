@@ -2,12 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 const dataDir = path.join(process.cwd(), "data");
-const dbPath = path.join(dataDir, "nightcap-db.json");
+const dbPath = process.env.NIGHTCAP_DATA_PATH || path.join(dataDir, "nightcap-db.json");
 
 const defaultState = {
   ratings: [],
   savedVenueIds: [],
-  invites: []
+  invites: [],
+  sessions: {}
 };
 
 export function loadState() {
@@ -17,7 +18,8 @@ export function loadState() {
     return {
       ratings: Array.isArray(parsed.ratings) ? parsed.ratings : [],
       savedVenueIds: Array.isArray(parsed.savedVenueIds) ? parsed.savedVenueIds : [],
-      invites: Array.isArray(parsed.invites) ? parsed.invites : []
+      invites: Array.isArray(parsed.invites) ? parsed.invites : [],
+      sessions: parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {}
     };
   } catch (error) {
     console.error("Failed to load local data store", error);
@@ -26,6 +28,8 @@ export function loadState() {
 }
 
 export function saveState(state) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(dbPath, JSON.stringify(state, null, 2));
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const tempPath = `${dbPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(state, null, 2));
+  fs.renameSync(tempPath, dbPath);
 }
