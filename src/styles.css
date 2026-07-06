@@ -519,6 +519,10 @@ button:disabled {
 .venue-photo {
   position: relative;
   height: 174px;
+  background:
+    linear-gradient(135deg, rgba(216, 255, 104, 0.2), transparent 38%),
+    radial-gradient(circle at 72% 30%, rgba(255, 249, 237, 0.2), transparent 24%),
+    linear-gradient(145deg, #302415, #10100e 52%, #222711);
   background-size: cover;
   background-position: center;
 }

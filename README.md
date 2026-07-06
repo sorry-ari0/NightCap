@@ -1,6 +1,6 @@
-# Nightcap MVP
+# NightCap MVP
 
-Nightcap is a Beli-inspired nightlife planner MVP for bars, clubs, lounges, and late-night spots.
+NightCap is a Beli-inspired nightlife planner MVP for bars, clubs, lounges, and late-night spots.
 
 ## What It Does
 

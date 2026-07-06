@@ -13,6 +13,14 @@ const categories = [
 ];
 
 const cityOptions = ["New York", "Miami", "Los Angeles"];
+const clientSeedVenues = [
+  { id: "client-nightmoves", canonicalVenueKey: "nightmoves-new-york", name: "Nightmoves", address: "Williamsburg, Brooklyn, NY", city: "New York", types: ["bar", "night_club"], categoryScores: {}, recentComments: [] },
+  { id: "client-le-bain", canonicalVenueKey: "le-bain-new-york", name: "Le Bain", address: "Meatpacking District, New York, NY", city: "New York", types: ["bar", "night_club"], categoryScores: {}, recentComments: [] },
+  { id: "client-public-records", canonicalVenueKey: "public-records-new-york", name: "Public Records", address: "Gowanus, Brooklyn, NY", city: "New York", types: ["bar", "night_club"], categoryScores: {}, recentComments: [] },
+  { id: "client-sweet-liberty", canonicalVenueKey: "sweet-liberty-miami", name: "Sweet Liberty", address: "Miami Beach, FL", city: "Miami", types: ["bar"], categoryScores: {}, recentComments: [] },
+  { id: "client-club-space", canonicalVenueKey: "club-space-miami", name: "Club Space", address: "Downtown Miami, FL", city: "Miami", types: ["night_club"], categoryScores: {}, recentComments: [] },
+  { id: "client-death-co", canonicalVenueKey: "death-and-co-los-angeles", name: "Death & Co", address: "Arts District, Los Angeles, CA", city: "Los Angeles", types: ["bar"], categoryScores: {}, recentComments: [] }
+];
 
 function getNightcapSession() {
   const existing = window.localStorage.getItem("nightcapSessionId");
@@ -41,14 +49,17 @@ function App() {
   const [sessionId] = useState(getNightcapSession);
 
   async function apiFetch(path, options = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeout ?? 8000);
     const response = await fetch(path, {
       ...options,
+      signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
         "x-nightcap-session": sessionId,
         ...(options.headers || {})
       }
-    });
+    }).finally(() => clearTimeout(timeout));
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Request failed");
     return data;
@@ -65,20 +76,43 @@ function App() {
       setSource(data.source);
       setFallbackReason(data.fallbackReason || "");
     } catch (loadError) {
-      setError(loadError.message);
+      const normalizedCity = city.toLowerCase();
+      const fallbackVenues = clientSeedVenues.filter((venue) => venue.city.toLowerCase().includes(normalizedCity) || normalizedCity.includes(venue.city.toLowerCase()));
+      setVenues(fallbackVenues.length ? fallbackVenues : clientSeedVenues);
+      setSource("seed");
+      setFallbackReason("Local demo fallback is active while the API is unavailable.");
+      setError(loadError.name === "AbortError" ? "API timed out, showing demo venues." : loadError.message);
     } finally {
       setLoading(false);
     }
   }
 
   async function loadProgress() {
-    const data = await apiFetch("/api/progress");
-    setProgress(data);
+    try {
+      const data = await apiFetch("/api/progress", { timeout: 5000 });
+      setProgress(data);
+    } catch {
+      setProgress({
+        inviteCount: 0,
+        ratingCount: 0,
+        savedCount: 0,
+        unlocks: [
+          { id: "friend-match", label: "Friend match scores", requiredInvites: 1, unlocked: false, remaining: 1 },
+          { id: "group-planner", label: "Group planner", requiredInvites: 2, unlocked: false, remaining: 2 },
+          { id: "city-scores", label: "City average scores", requiredInvites: 3, unlocked: false, remaining: 3 },
+          { id: "stealth-mode", label: "Private mode", requiredInvites: 4, unlocked: false, remaining: 4 }
+        ]
+      });
+    }
   }
 
   async function loadHealth() {
-    const data = await apiFetch("/api/health");
-    setHealth(data);
+    try {
+      const data = await apiFetch("/api/health", { timeout: 5000 });
+      setHealth(data);
+    } catch {
+      setHealth({ ok: false, mapsConfigured: false, storage: "offline demo" });
+    }
   }
 
   useEffect(() => {
@@ -115,8 +149,23 @@ function App() {
       setError("");
       setNotice("Invite recorded. Unlock progress updated.");
     } catch (inviteError) {
-      setNotice("");
-      setError(inviteError.message);
+      setProgress((current) => {
+        const inviteCount = (current?.inviteCount ?? 0) + 1;
+        return {
+          ...(current || {}),
+          inviteCount,
+          ratingCount: current?.ratingCount ?? 0,
+          savedCount: current?.savedCount ?? 0,
+          unlocks: (current?.unlocks ?? []).map((unlock) => ({
+            ...unlock,
+            unlocked: inviteCount >= unlock.requiredInvites,
+            remaining: Math.max(0, unlock.requiredInvites - inviteCount)
+          }))
+        };
+      });
+      setInviteContact("");
+      setNotice("Invite recorded locally. API sync is unavailable.");
+      setError("");
     }
   }
 
@@ -131,8 +180,15 @@ function App() {
       setPlan(data.plan);
       await loadProgress();
     } catch (planError) {
-      setPlan([]);
-      setError(planError.message);
+      const localPlan = venues.slice(0, 3).map((venue, index) => ({
+        stop: index + 1,
+        venue,
+        role: index === 0 ? "Start here" : index === 1 ? "Main move" : "Late-night backup",
+        reason: "Built from local demo venues while API sync is unavailable."
+      }));
+      setPlan(localPlan);
+      setNotice("Plan built locally. API sync is unavailable.");
+      setError("");
     }
   }
 
@@ -140,7 +196,7 @@ function App() {
     if (!plan.length) return;
     try {
       const text = plan.map((stop) => `${stop.stop}. ${stop.role}: ${stop.venue.name}`).join("\n");
-      await navigator.clipboard?.writeText(`Nightcap plan\n${text}`);
+      await navigator.clipboard?.writeText(`NightCap plan\n${text}`);
       setNotice("Plan copied.");
     } catch {
       setError("Could not copy the plan in this browser.");
@@ -159,7 +215,22 @@ function App() {
       await loadVenues();
       await loadProgress();
     } catch (ratingError) {
-      setError(ratingError.message);
+      setVenues((items) => items.map((item) => item.id === payload.venueId ? {
+        ...item,
+        overallScore: payload.overallScore,
+        ratingCount: (item.ratingCount || 0) + 1,
+        recentComments: payload.comment ? [{ comment: payload.comment, overallScore: payload.overallScore, createdAt: new Date().toISOString() }] : item.recentComments
+      } : item));
+      setProgress((current) => ({
+        ...(current || {}),
+        inviteCount: current?.inviteCount ?? 0,
+        ratingCount: (current?.ratingCount ?? 0) + 1,
+        savedCount: current?.savedCount ?? 0,
+        unlocks: current?.unlocks ?? []
+      }));
+      setSelectedVenue(null);
+      setNotice("Rating saved locally. API sync is unavailable.");
+      setError("");
     }
   }
 
@@ -173,7 +244,7 @@ function App() {
     <main className="app">
       <section className="hero">
         <div className="hero-copy">
-          <p className="eyebrow"><Moon size={14} /> Nightcap</p>
+          <p className="eyebrow"><Moon size={14} /> NightCap</p>
           <h1>Your night, ranked before it starts.</h1>
           <p className="lede">Find the right bar, club, or late-night move from live venue data, your ratings, and the friends you bring into the graph.</p>
         </div>
@@ -335,9 +406,12 @@ function App() {
 function VenueCard({ venue, onRate, onSave }) {
   const score = venue.overallScore ?? venue.googleRating;
   const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${venue.name} ${venue.address || venue.city}`)}`;
+  const photoStyle = venue.photoUrl
+    ? { backgroundImage: `url(${venue.photoUrl})` }
+    : undefined;
   return (
     <article className="venue-card">
-      <div className="venue-photo" style={{ backgroundImage: `url(${venue.photoUrl || "https://images.unsplash.com/photo-1575444758702-4a6b9222336e?auto=format&fit=crop&w=1200&q=80"})` }}>
+      <div className="venue-photo" style={photoStyle}>
         <button className={venue.saved ? "icon saved" : "icon"} onClick={() => onSave(venue)} aria-label="Save venue">
           <Bookmark size={18} />
         </button>

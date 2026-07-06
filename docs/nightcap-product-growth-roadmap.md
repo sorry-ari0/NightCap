@@ -1,16 +1,16 @@
-# Nightcap Product and Growth Roadmap
+# NightCap Product and Growth Roadmap
 
 ## Product Thesis
 
-Nightcap should become the social memory, ranking, and planning layer for nightlife. Maps gives users locations; Nightcap gives them taste, social proof, and a reason to bring friends into the graph.
+NightCap should become the social memory, ranking, and planning layer for nightlife. Maps gives users locations; NightCap gives them taste, social proof, and a reason to bring friends into the graph.
 
 The core loop:
 
 1. Pull venues from Maps or seed data.
 2. User rates/ranks bars, clubs, lounges, rooftops, and late-night spots.
-3. Nightcap turns that activity into a personal nightlife profile.
+3. NightCap turns that activity into a personal nightlife profile.
 4. User invites friends to unlock higher-value social features.
-5. User shares public ranking artifacts that bring new users back into Nightcap.
+5. User shares public ranking artifacts that bring new users back into NightCap.
 
 ## Required Growth Gate
 
@@ -19,11 +19,11 @@ Users can unlock and publicly share their ranking only after **3 successful invi
 This should be a referral gate, not a spam wall:
 
 - Show the ranking preview immediately, but blur/share-lock the public version.
-- Explain: "Invite 3 friends to publish your Nightcap ranking."
+- Explain: "Invite 3 friends to publish your NightCap ranking."
 - Count only successful invites: the invited person must create an account or verify phone/email.
 - Show progress: `1/3 friends joined`.
 - Let users continue using the app without unlocking public sharing.
-- Provide non-spammy invite copy: "I’m building my nightlife ranking on Nightcap. Join so we can compare spots."
+- Provide non-spammy invite copy: "I’m building my nightlife ranking on NightCap. Join so we can compare spots."
 - Do not auto-message contacts or dark-pattern users into contact upload.
 
 Implementation notes:
@@ -50,7 +50,7 @@ Build now.
 2. **Venue Discovery**
    - Google Places Text Search and Place Details.
    - Types: `bar`, `night_club`, live music/event venues where relevant.
-   - Store Google Place IDs, but keep Nightcap user data in our own venue graph.
+   - Store Google Place IDs, but keep NightCap user data in our own venue graph.
 
 3. **Ratings**
    - Required overall score.
@@ -89,7 +89,7 @@ Build next. This is the highest-leverage growth surface.
      - "Ari’s Top 10 NYC Nightlife"
      - Top 3 venues
      - category badge: "Best for dancing", "Cocktail person", "Late-night loyalist"
-     - Nightcap watermark and QR/link
+     - NightCap watermark and QR/link
    - Export PNG and native Web Share API.
 
 4. **Taste Badges**

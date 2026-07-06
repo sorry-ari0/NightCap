@@ -35,5 +35,5 @@ test("builds and copies a night plan", async ({ page, context }) => {
   await page.getByRole("button", { name: "Copy plan" }).click();
   await expect(page.getByText("Plan copied.")).toBeVisible();
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
-  expect(clipboard).toContain("Nightcap plan");
+  expect(clipboard).toContain("NightCap plan");
 });

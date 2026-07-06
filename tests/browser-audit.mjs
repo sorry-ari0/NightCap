@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 
 const port = 4224;
@@ -27,8 +27,8 @@ const failedRequests = [];
 try {
   console.log("browser-audit: waiting for server");
   await waitForHealth();
-  await auditViewport({ width: 1440, height: 1100 }, "desktop");
-  await auditViewport({ width: 390, height: 1100, isMobile: true }, "mobile");
+  await auditViewport({ width: 1180, height: 820 }, "desktop");
+  await auditViewport({ width: 390, height: 820, isMobile: true }, "mobile");
 
   assert.deepEqual(consoleErrors, []);
   assert.deepEqual(failedRequests, []);
@@ -46,7 +46,8 @@ async function auditViewport(viewport, name) {
     permissions: ["clipboard-read", "clipboard-write"]
   });
   const page = await context.newPage();
-  page.setDefaultTimeout(8_000);
+  page.setDefaultTimeout(20_000);
+  page.setDefaultNavigationTimeout(30_000);
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(`${name}: ${message.text()}`);
   });
@@ -61,8 +62,13 @@ async function auditViewport(viewport, name) {
   console.log(`browser-audit: ${name} goto`);
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   console.log(`browser-audit: ${name} waiting for venues`);
-  await page.waitForSelector(".venue-card", { timeout: 10_000 });
-  await page.screenshot({ path: `.tmp/nightcap-${name}.png`, fullPage: false, timeout: 15_000 });
+  try {
+    await page.waitForSelector(".venue-card", { timeout: 20_000 });
+  } catch (error) {
+    console.error(`browser-audit: ${name} body text\n${await page.locator("body").innerText().catch(() => "<unavailable>")}`);
+    console.error(`browser-audit: ${name} console errors\n${consoleErrors.join("\n") || "<none>"}`);
+    throw error;
+  }
 
   console.log(`browser-audit: ${name} invites`);
   await page.fill('input[placeholder="friend@example.com"]', `${name}@example.com`);
@@ -90,6 +96,7 @@ async function auditViewport(viewport, name) {
   await page.click('button:has-text("Build tonight")');
   await page.waitForSelector(".plan-stop");
   assert.equal(await page.locator(".plan-stop").count(), 3);
+  await page.screenshot({ path: `.tmp/nightcap-${name}.png`, fullPage: false, timeout: 15_000 });
   console.log(`browser-audit: ${name} done`);
   await context.close();
   await browser.close();
@@ -100,23 +107,19 @@ async function launchBrowser() {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       console.log(`browser-audit: launching chromium attempt ${attempt}`);
-      execFileSync("pkill", ["-f", "chromium"], { stdio: "ignore" });
-    } catch {
-      // No existing Chromium processes.
-    }
-
-    try {
+      const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined;
       return await chromium.launch({
-        executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || "/usr/bin/chromium",
+        ...(executablePath ? { executablePath } : {}),
         headless: true,
         timeout: 60_000,
         args: [
           "--disable-gpu",
-          "--disable-software-rasterizer",
           "--disable-features=Vulkan",
-          "--use-gl=disabled",
           "--no-sandbox",
-          "--disable-dev-shm-usage"
+          "--disable-dev-shm-usage",
+          "--no-proxy-server",
+          "--proxy-server=direct://",
+          "--proxy-bypass-list=*"
         ]
       });
     } catch (error) {

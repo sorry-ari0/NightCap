@@ -10,13 +10,16 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:3001",
     trace: "retain-on-failure",
     launchOptions: {
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || "/usr/bin/chromium",
+      ...(process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.PLAYWRIGHT_EXECUTABLE_PATH
+        ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.PLAYWRIGHT_EXECUTABLE_PATH }
+        : {}),
       args: [
         "--disable-gpu",
-        "--disable-software-rasterizer",
         "--disable-features=Vulkan",
-        "--use-gl=disabled",
-        "--no-sandbox"
+        "--no-sandbox",
+        "--no-proxy-server",
+        "--proxy-server=direct://",
+        "--proxy-bypass-list=*"
       ]
     }
   },

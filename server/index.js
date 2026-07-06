@@ -320,7 +320,7 @@ app.post("/api/plans", (req, res) => {
       stop: index + 1,
       venue,
       role: index === 0 ? "Start here" : index === 1 ? "Main move" : "Late-night backup",
-      reason: reasonForVenue(venue, priorities, hasGroupPlanner)
+      reason: reasonForVenue(venue, priorities, sessionData.invites.length)
     }))
   });
 });
@@ -353,9 +353,12 @@ function plannerScore(venue, priorities, groupSize) {
   return Math.round(((venue.overallScore ?? categoryAverage ?? 7) + categoryAverage + socialBoost + savedBoost - groupPenalty) * 10) / 10;
 }
 
-function reasonForVenue(venue, priorities, hasGroupPlanner) {
+function reasonForVenue(venue, priorities, inviteCount) {
   const readable = priorities.length ? priorities.join(", ") : "overall fit";
-  const unlockNote = hasGroupPlanner ? " Group planning is unlocked." : " Invite one more friend to unlock group planning.";
+  const remainingInvites = Math.max(0, 2 - inviteCount);
+  const unlockNote = remainingInvites === 0
+    ? " Group planning is unlocked."
+    : ` Invite ${remainingInvites} more friend${remainingInvites === 1 ? "" : "s"} to unlock group planning.`;
   if (venue.ratingCount) return `Strong ${readable} signal from ${venue.ratingCount} rating${venue.ratingCount === 1 ? "" : "s"}.${unlockNote}`;
   if (venue.googleRating) return `Good Maps baseline (${venue.googleRating}) while the local rating graph fills in.`;
   return "Included as a seed spot so the planner works before map data is connected.";
