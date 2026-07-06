@@ -52,6 +52,19 @@ try {
   const inviteTwo = await request("/api/invites", { method: "POST", body: { contact: "friend2@example.com" } });
   assert.equal(inviteTwo.inviteCount, 2);
 
+  await assert.rejects(
+    () => request("/api/rankings/publish", { method: "POST", body: {} }),
+    /Invite 1 more friend/
+  );
+
+  const inviteThree = await request("/api/invites", { method: "POST", body: { contact: "friend3@example.com" } });
+  assert.equal(inviteThree.unlocks.find((unlock) => unlock.id === "public-ranking").unlocked, true);
+
+  const publishedRanking = await request("/api/rankings/publish", { method: "POST", body: {} });
+  assert.equal(publishedRanking.published, true);
+  assert.equal(publishedRanking.inviteGate.unlocked, true);
+  assert.ok(publishedRanking.shareText.includes("NightCap"));
+
   const plan = await request("/api/plans", {
     method: "POST",
     body: { venues: venues.venues, groupSize: 4, priorities: ["vibes", "people"] }

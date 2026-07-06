@@ -37,6 +37,7 @@ a {
 .controls,
 .workspace,
 .onboarding,
+.ranking-section,
 .status-bar,
 .banner {
   max-width: 1500px;
@@ -245,6 +246,7 @@ button:disabled {
 .banner,
 .status-bar,
 .onboarding,
+.ranking-section,
 .planner,
 .venues {
   border: 1px solid rgba(246, 240, 230, 0.14);
@@ -355,6 +357,127 @@ button:disabled {
   color: rgba(246, 240, 230, 0.58);
   font-size: 12px;
   font-weight: 780;
+}
+
+.ranking-section {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 430px;
+  gap: 16px;
+  align-items: stretch;
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.ranking-copy h2 {
+  margin-bottom: 8px;
+  color: #fff9ed;
+  font-size: 30px;
+  line-height: 1.04;
+}
+
+.ranking-copy p:last-child {
+  max-width: 720px;
+  margin-bottom: 0;
+  color: rgba(246, 240, 230, 0.66);
+  line-height: 1.46;
+}
+
+.ranking-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #353326;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(216, 255, 104, 0.12), transparent 42%),
+    #11110f;
+}
+
+.ranking-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.ranking-card-head strong {
+  display: block;
+  margin-top: 3px;
+  color: #fff9ed;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.ranking-kicker {
+  color: rgba(246, 240, 230, 0.58);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.gate-pill {
+  flex: 0 0 auto;
+  padding: 7px 9px;
+  border: 1px solid #4b4633;
+  border-radius: 999px;
+  color: rgba(246, 240, 230, 0.72);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.gate-pill.unlocked {
+  border-color: rgba(216, 255, 104, 0.72);
+  color: #d8ff68;
+}
+
+.ranking-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ranking-row {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 8px;
+  background: #191915;
+}
+
+.ranking-row > span {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #d8ff68;
+  color: #10100e;
+  font-weight: 950;
+}
+
+.ranking-row strong,
+.ranking-row small {
+  display: block;
+}
+
+.ranking-row strong {
+  color: #fff9ed;
+  font-size: 15px;
+}
+
+.ranking-row small {
+  margin-top: 2px;
+  color: rgba(246, 240, 230, 0.58);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.ranking-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .workspace {
@@ -689,12 +812,17 @@ button:disabled {
   .controls,
   .workspace,
   .onboarding,
+  .ranking-section,
   .unlock-grid,
   .status-bar {
     grid-template-columns: 1fr;
   }
 
   .invite-form {
+    grid-template-columns: 1fr;
+  }
+
+  .ranking-actions {
     grid-template-columns: 1fr;
   }
 

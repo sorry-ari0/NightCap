@@ -43,6 +43,7 @@ function App() {
   const [progress, setProgress] = useState(null);
   const [inviteContact, setInviteContact] = useState("");
   const [health, setHealth] = useState(null);
+  const [ranking, setRanking] = useState(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [fallbackReason, setFallbackReason] = useState("");
@@ -106,6 +107,34 @@ function App() {
     }
   }
 
+  async function loadRanking() {
+    try {
+      const data = await apiFetch("/api/rankings/me", { timeout: 5000 });
+      setRanking(data);
+    } catch {
+      setRanking({
+        published: false,
+        shareText: "I’m building my NightCap nightlife ranking.",
+        inviteGate: {
+          required: 3,
+          successfulInvites: progress?.inviteCount ?? 0,
+          remaining: Math.max(0, 3 - (progress?.inviteCount ?? 0)),
+          unlocked: (progress?.inviteCount ?? 0) >= 3
+        },
+        ranking: venues
+          .filter((venue) => Number.isFinite(venue.overallScore))
+          .sort((a, b) => b.overallScore - a.overallScore)
+          .slice(0, 10)
+          .map((venue) => ({
+            name: venue.name,
+            address: venue.address,
+            overallScore: venue.overallScore,
+            comment: venue.recentComments?.[0]?.comment
+          }))
+      });
+    }
+  }
+
   async function loadHealth() {
     try {
       const data = await apiFetch("/api/health", { timeout: 5000 });
@@ -119,6 +148,7 @@ function App() {
     loadVenues();
     loadProgress();
     loadHealth();
+    loadRanking();
   }, []);
 
   async function saveVenue(venue) {
@@ -145,6 +175,7 @@ function App() {
         body: JSON.stringify({ contact: inviteContact })
       });
       setProgress(data);
+      await loadRanking();
       setInviteContact("");
       setError("");
       setNotice("Invite recorded. Unlock progress updated.");
@@ -163,6 +194,7 @@ function App() {
           }))
         };
       });
+      await loadRanking();
       setInviteContact("");
       setNotice("Invite recorded locally. API sync is unavailable.");
       setError("");
@@ -214,6 +246,7 @@ function App() {
       setNotice("Rating saved.");
       await loadVenues();
       await loadProgress();
+      await loadRanking();
     } catch (ratingError) {
       setVenues((items) => items.map((item) => item.id === payload.venueId ? {
         ...item,
@@ -231,6 +264,33 @@ function App() {
       setSelectedVenue(null);
       setNotice("Rating saved locally. API sync is unavailable.");
       setError("");
+      await loadRanking();
+    }
+  }
+
+  async function publishRanking() {
+    try {
+      const data = await apiFetch("/api/rankings/publish", {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setRanking(data);
+      setNotice("Your public ranking is unlocked.");
+      setError("");
+    } catch (publishError) {
+      setNotice("");
+      setError(publishError.message);
+      await loadRanking();
+    }
+  }
+
+  async function copyRanking() {
+    const text = ranking?.shareText || "I’m building my NightCap nightlife ranking.";
+    try {
+      await navigator.clipboard?.writeText(text);
+      setNotice("Ranking share text copied.");
+    } catch {
+      setError("Could not copy the ranking in this browser.");
     }
   }
 
@@ -322,6 +382,52 @@ function App() {
               <span>{unlock.unlocked ? "Unlocked" : `${unlock.remaining} invite${unlock.remaining === 1 ? "" : "s"} left`}</span>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="ranking-section">
+        <div className="ranking-copy">
+          <p className="eyebrow">Public ranking</p>
+          <h2>Your top spots become the growth loop.</h2>
+          <p>Preview your ranking now. Publish and share it after 3 successful invites so the list launches with friends attached.</p>
+        </div>
+        <div className="ranking-card">
+          <div className="ranking-card-head">
+            <div>
+              <span className="ranking-kicker">NightCap ranking</span>
+              <strong>{ranking?.published ? "Public" : "Private preview"}</strong>
+            </div>
+            <span className={ranking?.inviteGate?.unlocked ? "gate-pill unlocked" : "gate-pill"}>
+              {ranking?.inviteGate?.unlocked ? "Share unlocked" : `${ranking?.inviteGate?.successfulInvites ?? 0}/3 joined`}
+            </span>
+          </div>
+
+          <div className="ranking-list">
+            {(ranking?.ranking?.length ? ranking.ranking : venues.slice(0, 3)).slice(0, 5).map((venue, index) => (
+              <div className="ranking-row" key={`${venue.name}-${index}`}>
+                <span>{index + 1}</span>
+                <div>
+                  <strong>{venue.name}</strong>
+                  <small>{venue.overallScore ? `${venue.overallScore} overall` : "Rate to rank"}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {!ranking?.inviteGate?.unlocked && (
+            <p className="helper-text">Invite {ranking?.inviteGate?.remaining ?? 3} more friend{(ranking?.inviteGate?.remaining ?? 3) === 1 ? "" : "s"} to publish and share your ranking.</p>
+          )}
+
+          <div className="ranking-actions">
+            <button className="primary full" onClick={publishRanking} disabled={!ranking?.inviteGate?.unlocked || ranking?.published}>
+              <Unlock size={18} />
+              {ranking?.published ? "Published" : "Publish ranking"}
+            </button>
+            <button className="secondary full" onClick={copyRanking} disabled={!ranking?.inviteGate?.unlocked}>
+              <Copy size={18} />
+              Copy share
+            </button>
+          </div>
         </div>
       </section>
 
@@ -482,7 +588,16 @@ function RatingModal({ venue, onClose, onSubmit }) {
         aria-labelledby={titleId}
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit({ venueId: venue.id, canonicalVenueKey: venue.canonicalVenueKey, overallScore, ...optionalScores, comment });
+          onSubmit({
+            venueId: venue.id,
+            canonicalVenueKey: venue.canonicalVenueKey,
+            venueName: venue.name,
+            venueAddress: venue.address,
+            venueCity: venue.city,
+            overallScore,
+            ...optionalScores,
+            comment
+          });
         }}
       >
         <div className="modal-head">

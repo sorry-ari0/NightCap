@@ -29,6 +29,7 @@ function getSession(req) {
 const unlocks = [
   { id: "friend-match", label: "Friend match scores", requiredInvites: 1 },
   { id: "group-planner", label: "Group planner", requiredInvites: 2 },
+  { id: "public-ranking", label: "Public ranking share", requiredInvites: 3 },
   { id: "city-scores", label: "City average scores", requiredInvites: 3 },
   { id: "stealth-mode", label: "Private mode", requiredInvites: 4 }
 ];
@@ -225,6 +226,9 @@ app.post("/api/ratings", (req, res) => {
     sessionId,
     venueId: String(req.body.venueId).slice(0, 140),
     canonicalVenueKey: String(req.body.canonicalVenueKey || "").slice(0, 180),
+    venueName: String(req.body.venueName || req.body.venueId).trim().slice(0, 120),
+    venueAddress: String(req.body.venueAddress || "").trim().slice(0, 180),
+    venueCity: String(req.body.venueCity || "").trim().slice(0, 80),
     overallScore,
     ...optionalScores,
     comment: String(req.body.comment || "").trim().slice(0, 500),
@@ -325,6 +329,30 @@ app.post("/api/plans", (req, res) => {
   });
 });
 
+app.get("/api/rankings/me", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  res.json(rankingPayload(sessionId, sessionData));
+});
+
+app.post("/api/rankings/publish", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const successfulInvites = sessionData.invites.length;
+
+  if (successfulInvites < 3) {
+    return res.status(403).json({
+      error: `Invite ${3 - successfulInvites} more friend${3 - successfulInvites === 1 ? "" : "s"} to publish your ranking.`,
+      ranking: rankingPayload(sessionId, sessionData)
+    });
+  }
+
+  sessionData.publicRanking ??= {};
+  sessionData.publicRanking.publishedAt = sessionData.publicRanking.publishedAt || new Date().toISOString();
+  sessionData.publicRanking.slug = sessionData.publicRanking.slug || `nightcap-${sessionId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}`;
+  persist();
+
+  res.json(rankingPayload(sessionId, sessionData));
+});
+
 app.use(express.static(distPath));
 
 app.get(/^(?!\/api).*/, (req, res) => {
@@ -377,6 +405,52 @@ function progressPayload(sessionId, sessionData) {
       remaining: Math.max(0, unlock.requiredInvites - inviteCount)
     })),
     recentInvites: sessionData.invites.slice(-4).reverse()
+  };
+}
+
+function rankingPayload(sessionId, sessionData) {
+  const successfulInvites = sessionData.invites.length;
+  const topVenues = ratings
+    .filter((rating) => rating.sessionId === sessionId)
+    .reduce((acc, rating) => {
+      const key = rating.canonicalVenueKey || rating.venueId;
+      const existing = acc.get(key);
+      if (!existing || rating.overallScore > existing.overallScore) {
+        acc.set(key, {
+          venueId: rating.venueId,
+          canonicalVenueKey: rating.canonicalVenueKey,
+          name: rating.venueName || rating.venueId,
+          address: rating.venueAddress,
+          city: rating.venueCity,
+          overallScore: rating.overallScore,
+          comment: rating.comment,
+          ratedAt: rating.createdAt
+        });
+      }
+      return acc;
+    }, new Map());
+
+  const ranking = Array.from(topVenues.values())
+    .sort((a, b) => b.overallScore - a.overallScore)
+    .slice(0, 10);
+  const published = Boolean(sessionData.publicRanking?.publishedAt);
+  const slug = sessionData.publicRanking?.slug || null;
+
+  return {
+    published,
+    publishedAt: sessionData.publicRanking?.publishedAt || null,
+    slug,
+    shareUrl: published && slug ? `/u/demo/rankings/${slug}` : null,
+    shareText: ranking.length
+      ? `My NightCap nightlife ranking: ${ranking.slice(0, 3).map((venue, index) => `${index + 1}. ${venue.name}`).join(" / ")}`
+      : "I’m building my NightCap nightlife ranking.",
+    inviteGate: {
+      required: 3,
+      successfulInvites,
+      remaining: Math.max(0, 3 - successfulInvites),
+      unlocked: successfulInvites >= 3
+    },
+    ranking
   };
 }
 
