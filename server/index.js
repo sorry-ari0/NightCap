@@ -410,11 +410,7 @@ app.get("/api/cities", (req, res) => {
 
 app.get("/api/health", (req, res) => {
   res.json({
-    ok: true,
-    mapsConfigured: Boolean(googleKey),
-    mapsRequired: requireGoogleMaps,
-    storage: "local-json",
-    venueCacheEntries: Object.keys(venueCache).length
+    ok: true
   });
 });
 
@@ -588,7 +584,7 @@ app.post("/api/profile/photo", (req, res) => {
   res.json(profilePayload(sessionId, sessionData));
 });
 
-app.post("/api/password/reset-request", (req, res) => {
+app.post("/api/password/reset-request", async (req, res) => {
   getSession(req);
   const email = String(req.body.email || req.body.contact || "").trim().slice(0, 120);
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "valid account email is required" });
@@ -605,16 +601,22 @@ app.post("/api/password/reset-request", (req, res) => {
     expiresAt: new Date(Date.now() + passwordResetTtlMs).toISOString(),
     createdAt: new Date().toISOString()
   };
-  const emailDelivery = passwordResetEmail(targetSessionData.profile.email, resetToken, targetSessionData.passwordReset.expiresAt);
-  sentEmails.push(emailDelivery);
-  persist();
-  res.status(201).json({
-    ok: true,
-    deliveryId: emailDelivery.id,
-    sentTo: targetSessionData.profile.email,
-    expiresAt: targetSessionData.passwordReset.expiresAt,
-    resetToken: process.env.NODE_ENV === "production" ? undefined : resetToken
-  });
+  try {
+    const emailDelivery = await passwordResetEmail(targetSessionData.profile.email, resetToken, targetSessionData.passwordReset.expiresAt);
+    sentEmails.push(emailDelivery);
+    persist();
+    res.status(201).json({
+      ok: true,
+      deliveryId: emailDelivery.id,
+      sentTo: targetSessionData.profile.email,
+      expiresAt: targetSessionData.passwordReset.expiresAt,
+      resetToken: process.env.NODE_ENV === "production" ? undefined : resetToken
+    });
+  } catch (error) {
+    delete targetSessionData.passwordReset;
+    console.error("Password reset email failed", error);
+    res.status(502).json({ error: "password reset email could not be sent" });
+  }
 });
 
 app.post("/api/password/reset", (req, res) => {
@@ -1106,17 +1108,44 @@ function findSessionByEmail(normalizedEmail) {
   });
 }
 
-function passwordResetEmail(email, resetToken, expiresAt) {
-  return {
+async function passwordResetEmail(email, resetToken, expiresAt) {
+  const delivery = {
     id: `email-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     to: email,
     subject: "Reset your NightCap password",
     template: "password-reset",
-    resetToken,
-    body: `Use this code to reset your NightCap password: ${resetToken}`,
     expiresAt,
     sentAt: new Date().toISOString(),
-    provider: process.env.EMAIL_PROVIDER || "local-json"
+    provider: process.env.EMAIL_PROVIDER || (process.env.RESEND_API_KEY ? "resend" : "local-json"),
+    status: "queued_local"
+  };
+
+  if (!process.env.RESEND_API_KEY) return delivery;
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: process.env.NIGHTCAP_EMAIL_FROM || "NightCap <onboarding@resend.dev>",
+      to: [email],
+      subject: delivery.subject,
+      text: `Use this code to reset your NightCap password: ${resetToken}\n\nThis code expires at ${expiresAt}.`,
+      html: `<p>Use this code to reset your NightCap password:</p><p><strong>${resetToken}</strong></p><p>This code expires at ${expiresAt}.</p>`
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.message || `Resend request failed with HTTP ${response.status}`);
+  }
+
+  return {
+    ...delivery,
+    provider: "resend",
+    providerId: data.id || null,
+    status: "sent"
   };
 }
 
@@ -1346,6 +1375,7 @@ if (process.env.NODE_ENV === "test") {
     for (const key of Object.keys(venueCache)) delete venueCache[key];
     feedback.splice(0, feedback.length);
     posts.splice(0, posts.length);
+    sentEmails.splice(0, sentEmails.length);
     persist();
     res.json({ ok: true });
   });

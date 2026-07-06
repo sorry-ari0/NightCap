@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 
 import { createRoot } from "react-dom/client";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertCircle, Bookmark, CalendarClock, Copy, Database, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, UserRound, Users } from "lucide-react";
+import { AlertCircle, Bookmark, CalendarClock, Copy, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, UserRound, Users } from "lucide-react";
 import "./styles.css";
 
 const categories = [
@@ -73,7 +73,6 @@ function App() {
   const [resetForm, setResetForm] = useState({ contact: "", token: "", password: "" });
   const [resetNotice, setResetNotice] = useState("");
   const [feedbackMessage, setFeedbackMessage] = useState("");
-  const [health, setHealth] = useState(null);
   const [ranking, setRanking] = useState(null);
   const [peopleQuery, setPeopleQuery] = useState("");
   const [peopleResults, setPeopleResults] = useState([]);
@@ -250,19 +249,9 @@ function App() {
     }
   }
 
-  async function loadHealth() {
-    try {
-      const data = await apiFetch("/api/health", { timeout: 5000 });
-      setHealth(data);
-    } catch {
-      setHealth({ ok: false, mapsConfigured: false, storage: "offline demo" });
-    }
-  }
-
   useEffect(() => {
     loadVenues();
     loadProgress();
-    loadHealth();
     loadRanking();
     loadContacts();
     loadProfile();
@@ -1109,10 +1098,9 @@ function ContactGraph({ graph, onInvite }) {
 }
 
 function sourceLabel(source, cacheStatus) {
-  if (cacheStatus === "hit") return "Stored Maps data";
-  if (source === "google-cache") return "Stored Maps data";
-  if (source === "google") return "Google Places";
-  return "Seed fallback";
+  if (cacheStatus === "hit" || source === "google-cache") return "Saved venue data";
+  if (source === "google") return "Live venue data";
+  return "Starter venues";
 }
 
 function buildMapData(venues) {
@@ -1366,7 +1354,7 @@ function VenueMap({ mapData, venues, onVisibleVenuesChange }) {
     <div className="venue-map" aria-label="Stored venue map">
       <div className="map-canvas" ref={mapNodeRef} />
       <div className="map-side">
-        <p className="eyebrow"><Database size={14} /> Cached map</p>
+        <p className="eyebrow"><MapPin size={14} /> Venue map</p>
         <h3>{activePoint?.name || "No mapped venues yet"}</h3>
         <p>{activePoint ? venueById.get(activePoint.id)?.address || activePoint.city : "Search a launch city to populate stored coordinates."}</p>
         <div className="map-meta">

@@ -34,6 +34,8 @@ try {
 
   const cities = await request("/api/cities");
   assert.deepEqual(cities.launchOrder, ["New York", "San Francisco", "Los Angeles"]);
+  const health = await request("/api/health");
+  assert.deepEqual(health, { ok: true });
 
   const profile = await request("/api/profile", {
     method: "POST",
