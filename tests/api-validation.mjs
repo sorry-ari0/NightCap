@@ -60,10 +60,33 @@ try {
   const inviteThree = await request("/api/invites", { method: "POST", body: { contact: "friend3@example.com" } });
   assert.equal(inviteThree.unlocks.find((unlock) => unlock.id === "public-ranking").unlocked, true);
 
+  await request("/api/ratings", {
+    method: "POST",
+    body: {
+      venueId: venues.venues[0].id,
+      canonicalVenueKey: venues.venues[0].canonicalVenueKey,
+      venueName: venues.venues[0].name,
+      venueAddress: venues.venues[0].address,
+      venueCity: venues.venues[0].city,
+      overallScore: 9.2,
+      vibesScore: 9,
+      comment: "API audit top spot."
+    }
+  });
+
   const publishedRanking = await request("/api/rankings/publish", { method: "POST", body: {} });
   assert.equal(publishedRanking.published, true);
   assert.equal(publishedRanking.inviteGate.unlocked, true);
   assert.ok(publishedRanking.shareText.includes("NightCap"));
+  assert.ok(publishedRanking.shareUrl.includes("/u/demo/rankings/"));
+
+  const publicRanking = await request(publishedRanking.shareUrl.replace(/^\/u\//, "/api/u/"));
+  assert.equal(publicRanking.published, true);
+  assert.equal(publicRanking.ranking[0].comment, "API audit top spot.");
+
+  const shareCard = await request("/api/share-cards", { method: "POST", body: {} });
+  assert.equal(shareCard.shareCard.format, "svg");
+  assert.ok(shareCard.shareCard.dataUrl.startsWith("data:image/svg+xml;base64,"));
 
   const plan = await request("/api/plans", {
     method: "POST",

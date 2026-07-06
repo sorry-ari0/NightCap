@@ -31,6 +31,11 @@ function getNightcapSession() {
 }
 
 function App() {
+  const publicRankingMatch = window.location.pathname.match(/^\/u\/([^/]+)\/rankings\/([^/]+)/);
+  if (publicRankingMatch) {
+    return <PublicRankingPage handle={publicRankingMatch[1]} slug={publicRankingMatch[2]} />;
+  }
+
   const [city, setCity] = useState("New York");
   const [vibe, setVibe] = useState("cocktail bars");
   const [venues, setVenues] = useState([]);
@@ -44,6 +49,7 @@ function App() {
   const [inviteContact, setInviteContact] = useState("");
   const [health, setHealth] = useState(null);
   const [ranking, setRanking] = useState(null);
+  const [shareCard, setShareCard] = useState(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [fallbackReason, setFallbackReason] = useState("");
@@ -275,6 +281,7 @@ function App() {
         body: JSON.stringify({})
       });
       setRanking(data);
+      await createShareCard();
       setNotice("Your public ranking is unlocked.");
       setError("");
     } catch (publishError) {
@@ -285,12 +292,27 @@ function App() {
   }
 
   async function copyRanking() {
-    const text = ranking?.shareText || "I’m building my NightCap nightlife ranking.";
+    const shareUrl = ranking?.shareUrl ? `${window.location.origin}${ranking.shareUrl}` : "";
+    const text = [ranking?.shareText || "I’m building my NightCap nightlife ranking.", shareUrl].filter(Boolean).join("\n");
     try {
       await navigator.clipboard?.writeText(text);
       setNotice("Ranking share text copied.");
     } catch {
       setError("Could not copy the ranking in this browser.");
+    }
+  }
+
+  async function createShareCard() {
+    try {
+      const data = await apiFetch("/api/share-cards", {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setShareCard(data.shareCard);
+      return data.shareCard;
+    } catch {
+      setShareCard(null);
+      return null;
     }
   }
 
@@ -414,14 +436,30 @@ function App() {
             ))}
           </div>
 
+          {shareCard && (
+            <div className="share-card-preview">
+              <img src={shareCard.dataUrl} alt="NightCap ranking share card preview" />
+            </div>
+          )}
+
           {!ranking?.inviteGate?.unlocked && (
             <p className="helper-text">Invite {ranking?.inviteGate?.remaining ?? 3} more friend{(ranking?.inviteGate?.remaining ?? 3) === 1 ? "" : "s"} to publish and share your ranking.</p>
+          )}
+          {ranking?.published && ranking.shareUrl && (
+            <a className="public-link" href={ranking.shareUrl}>
+              <ExternalLink size={16} />
+              View public ranking
+            </a>
           )}
 
           <div className="ranking-actions">
             <button className="primary full" onClick={publishRanking} disabled={!ranking?.inviteGate?.unlocked || ranking?.published}>
               <Unlock size={18} />
               {ranking?.published ? "Published" : "Publish ranking"}
+            </button>
+            <button className="secondary full" onClick={createShareCard} disabled={!ranking?.published}>
+              <Sparkles size={18} />
+              Share card
             </button>
             <button className="secondary full" onClick={copyRanking} disabled={!ranking?.inviteGate?.unlocked}>
               <Copy size={18} />
@@ -505,6 +543,64 @@ function App() {
           onSubmit={submitRating}
         />
       )}
+    </main>
+  );
+}
+
+function PublicRankingPage({ handle, slug }) {
+  const [ranking, setRanking] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadPublicRanking() {
+      try {
+        const response = await fetch(`/api/u/${encodeURIComponent(handle)}/rankings/${encodeURIComponent(slug)}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Ranking unavailable");
+        setRanking(data);
+      } catch (loadError) {
+        setError(loadError.message);
+      }
+    }
+
+    loadPublicRanking();
+  }, [handle, slug]);
+
+  return (
+    <main className="app public-page">
+      <section className="public-hero">
+        <p className="eyebrow"><Moon size={14} /> NightCap public ranking</p>
+        <h1>{handle}'s nightlife ranking</h1>
+        <p className="lede">A public NightCap list unlocked through friends, ratings, and actual nightlife taste.</p>
+        <a className="secondary public-home" href="/">
+          <ExternalLink size={17} />
+          Build your ranking
+        </a>
+      </section>
+
+      {error && (
+        <div className="banner error">
+          <AlertCircle size={18} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <section className="public-ranking-board">
+        {(ranking?.ranking ?? []).map((venue, index) => (
+          <article className="public-rank-row" key={`${venue.name}-${index}`}>
+            <span>{index + 1}</span>
+            <div>
+              <h2>{venue.name}</h2>
+              <p>{venue.address || venue.city || "NightCap venue"}</p>
+              {venue.comment && <small>{venue.comment}</small>}
+            </div>
+            <strong>{venue.overallScore}</strong>
+          </article>
+        ))}
+        {ranking && !ranking.ranking.length && (
+          <p className="helper-text">This ranking is public, but it needs a few ratings before the list fills in.</p>
+        )}
+      </section>
     </main>
   );
 }

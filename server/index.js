@@ -277,12 +277,29 @@ app.post("/api/invites", (req, res) => {
       id: `invite-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       contact,
       normalized,
+      status: "credited",
+      joinedAt: new Date().toISOString(),
+      creditedAt: new Date().toISOString(),
       createdAt: new Date().toISOString()
     });
     persist();
   }
 
   res.status(201).json(progressPayload(sessionId, sessionData));
+});
+
+app.post("/api/invites/:inviteId/accept", (req, res) => {
+  const invite = Object.values(sessions)
+    .flatMap((sessionData) => sessionData.invites || [])
+    .find((item) => item.id === req.params.inviteId);
+
+  if (!invite) return res.status(404).json({ error: "invite not found" });
+
+  invite.status = "credited";
+  invite.joinedAt = invite.joinedAt || new Date().toISOString();
+  invite.creditedAt = invite.creditedAt || new Date().toISOString();
+  persist();
+  res.json({ invite });
 });
 
 app.post("/api/plans", (req, res) => {
@@ -336,7 +353,7 @@ app.get("/api/rankings/me", (req, res) => {
 
 app.post("/api/rankings/publish", (req, res) => {
   const { id: sessionId, data: sessionData } = getSession(req);
-  const successfulInvites = sessionData.invites.length;
+  const successfulInvites = successfulInviteCount(sessionData);
 
   if (successfulInvites < 3) {
     return res.status(403).json({
@@ -351,6 +368,35 @@ app.post("/api/rankings/publish", (req, res) => {
   persist();
 
   res.json(rankingPayload(sessionId, sessionData));
+});
+
+app.get("/api/u/:handle/rankings/:slug", (req, res) => {
+  const match = Object.entries(sessions).find(([, sessionData]) => {
+    return sessionData.publicRanking?.slug === req.params.slug && sessionData.publicRanking?.publishedAt;
+  });
+
+  if (!match) return res.status(404).json({ error: "public ranking not found" });
+
+  const [sessionId, sessionData] = match;
+  res.json({
+    handle: req.params.handle,
+    ...rankingPayload(sessionId, sessionData)
+  });
+});
+
+app.post("/api/share-cards", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const ranking = rankingPayload(sessionId, sessionData);
+  if (!ranking.published) {
+    return res.status(403).json({
+      error: "Publish your ranking before generating a share card.",
+      ranking
+    });
+  }
+
+  res.status(201).json({
+    shareCard: shareCardPayload(ranking)
+  });
 });
 
 app.use(express.static(distPath));
@@ -393,10 +439,11 @@ function reasonForVenue(venue, priorities, inviteCount) {
 }
 
 function progressPayload(sessionId, sessionData) {
-  const inviteCount = sessionData.invites.length;
+  const inviteCount = successfulInviteCount(sessionData);
   return {
     sessionId,
     inviteCount,
+    sentInviteCount: sessionData.invites.length,
     ratingCount: ratings.filter((rating) => rating.sessionId === sessionId).length,
     savedCount: sessionData.savedVenueIds.length,
     unlocks: unlocks.map((unlock) => ({
@@ -409,7 +456,7 @@ function progressPayload(sessionId, sessionData) {
 }
 
 function rankingPayload(sessionId, sessionData) {
-  const successfulInvites = sessionData.invites.length;
+  const successfulInvites = successfulInviteCount(sessionData);
   const topVenues = ratings
     .filter((rating) => rating.sessionId === sessionId)
     .reduce((acc, rating) => {
@@ -440,6 +487,7 @@ function rankingPayload(sessionId, sessionData) {
     published,
     publishedAt: sessionData.publicRanking?.publishedAt || null,
     slug,
+    handle: "demo",
     shareUrl: published && slug ? `/u/demo/rankings/${slug}` : null,
     shareText: ranking.length
       ? `My NightCap nightlife ranking: ${ranking.slice(0, 3).map((venue, index) => `${index + 1}. ${venue.name}`).join(" / ")}`
@@ -452,6 +500,48 @@ function rankingPayload(sessionId, sessionData) {
     },
     ranking
   };
+}
+
+function successfulInviteCount(sessionData) {
+  return (sessionData.invites || []).filter((invite) => {
+    return !invite.status || invite.status === "credited";
+  }).length;
+}
+
+function shareCardPayload(ranking) {
+  const top = ranking.ranking.slice(0, 3);
+  const title = top.length ? "My NightCap Top 3" : "My NightCap Ranking";
+  const lines = top.length
+    ? top.map((venue, index) => `${index + 1}. ${venue.name} - ${venue.overallScore}/10`)
+    : ["Building my nightlife ranking"];
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">`,
+    `<rect width="1200" height="630" fill="#101010"/>`,
+    `<rect x="56" y="56" width="1088" height="518" rx="28" fill="#f8f1e7"/>`,
+    `<text x="96" y="136" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#101010">NightCap</text>`,
+    `<text x="96" y="210" font-family="Arial, sans-serif" font-size="70" font-weight="800" fill="#101010">${escapeSvg(title)}</text>`,
+    ...lines.map((line, index) => `<text x="104" y="${300 + index * 74}" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#101010">${escapeSvg(line)}</text>`),
+    `<text x="96" y="540" font-family="Arial, sans-serif" font-size="28" fill="#444">Unlock yours with 3 friends at NightCap</text>`,
+    `</svg>`
+  ].join("");
+
+  return {
+    format: "svg",
+    width: 1200,
+    height: 630,
+    svg,
+    dataUrl: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+    shareText: ranking.shareText,
+    shareUrl: ranking.shareUrl
+  };
+}
+
+function escapeSvg(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function isValidInviteContact(contact) {
