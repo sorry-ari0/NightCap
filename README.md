@@ -32,7 +32,15 @@ Create `.env` from `.env.example` and set:
 GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 ```
 
-The server uses Google Places API Text Search and Place Photos. Without a key, the app uses fallback seed venues.
+The server uses Google Places API Text Search and Place Photos. With a valid key, venue cards use Google Places photo names through `/api/google-photo`, so the live site shows real location imagery instead of seed placeholders.
+
+For a real public deployment, also set:
+
+```sh
+REQUIRE_GOOGLE_MAPS=true
+```
+
+That makes `/api/venues` return a configuration error instead of silently using seed data when the Maps key is missing.
 
 ## Local Data
 
@@ -45,7 +53,9 @@ The fastest current deployment path is a single Render Web Service:
 - Build command: `npm install && npm run build`
 - Start command: `npm start`
 - Free instance type
-- Optional env var: `GOOGLE_MAPS_API_KEY`
+- Required env vars for a real site:
+  - `GOOGLE_MAPS_API_KEY`
+  - `REQUIRE_GOOGLE_MAPS=true`
 
 This repo includes `render.yaml` for a Render Blueprint deploy.
 

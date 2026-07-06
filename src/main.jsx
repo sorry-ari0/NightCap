@@ -22,6 +22,16 @@ const clientSeedVenues = [
   { id: "client-death-co", canonicalVenueKey: "death-and-co-los-angeles", name: "Death & Co", address: "Arts District, Los Angeles, CA", city: "Los Angeles", types: ["bar"], categoryScores: {}, recentComments: [] }
 ];
 
+function getAppBasePath() {
+  const match = window.location.pathname.match(/^(\/p\/[^/]+\/\d+)(?:\/|$)/);
+  return match ? match[1] : "";
+}
+
+function appPath(path) {
+  if (!path?.startsWith("/")) return path;
+  return `${getAppBasePath()}${path}`;
+}
+
 function getNightcapSession() {
   const existing = window.localStorage.getItem("nightcapSessionId");
   if (existing) return existing;
@@ -58,7 +68,7 @@ function App() {
   async function apiFetch(path, options = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), options.timeout ?? 8000);
-    const response = await fetch(path, {
+    const response = await fetch(appPath(path), {
       ...options,
       signal: controller.signal,
       headers: {
@@ -292,7 +302,7 @@ function App() {
   }
 
   async function copyRanking() {
-    const shareUrl = ranking?.shareUrl ? `${window.location.origin}${ranking.shareUrl}` : "";
+    const shareUrl = ranking?.shareUrl ? `${window.location.origin}${appPath(ranking.shareUrl)}` : "";
     const text = [ranking?.shareText || "I’m building my NightCap nightlife ranking.", shareUrl].filter(Boolean).join("\n");
     try {
       await navigator.clipboard?.writeText(text);
@@ -446,7 +456,7 @@ function App() {
             <p className="helper-text">Invite {ranking?.inviteGate?.remaining ?? 3} more friend{(ranking?.inviteGate?.remaining ?? 3) === 1 ? "" : "s"} to publish and share your ranking.</p>
           )}
           {ranking?.published && ranking.shareUrl && (
-            <a className="public-link" href={ranking.shareUrl}>
+            <a className="public-link" href={appPath(ranking.shareUrl)}>
               <ExternalLink size={16} />
               View public ranking
             </a>
@@ -554,7 +564,7 @@ function PublicRankingPage({ handle, slug }) {
   useEffect(() => {
     async function loadPublicRanking() {
       try {
-        const response = await fetch(`/api/u/${encodeURIComponent(handle)}/rankings/${encodeURIComponent(slug)}`);
+        const response = await fetch(appPath(`/api/u/${encodeURIComponent(handle)}/rankings/${encodeURIComponent(slug)}`));
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "Ranking unavailable");
         setRanking(data);
@@ -572,7 +582,7 @@ function PublicRankingPage({ handle, slug }) {
         <p className="eyebrow"><Moon size={14} /> NightCap public ranking</p>
         <h1>{handle}'s nightlife ranking</h1>
         <p className="lede">A public NightCap list unlocked through friends, ratings, and actual nightlife taste.</p>
-        <a className="secondary public-home" href="/">
+        <a className="secondary public-home" href={appPath("/")}>
           <ExternalLink size={17} />
           Build your ranking
         </a>
@@ -609,7 +619,7 @@ function VenueCard({ venue, onRate, onSave }) {
   const score = venue.overallScore ?? venue.googleRating;
   const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${venue.name} ${venue.address || venue.city}`)}`;
   const photoStyle = venue.photoUrl
-    ? { backgroundImage: `url(${venue.photoUrl})` }
+    ? { backgroundImage: `url(${appPath(venue.photoUrl)})` }
     : undefined;
   return (
     <article className="venue-card">

@@ -7,6 +7,7 @@ import { loadState, saveState } from "./store.js";
 const app = express();
 const port = process.env.PORT || 3001;
 const googleKey = process.env.GOOGLE_MAPS_API_KEY;
+const requireGoogleMaps = process.env.REQUIRE_GOOGLE_MAPS === "true";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.join(__dirname, "..", "dist");
 
@@ -155,6 +156,13 @@ app.get("/api/venues", async (req, res) => {
   const city = String(req.query.city || "New York").trim();
   const vibe = String(req.query.vibe || "").trim();
 
+  if (requireGoogleMaps && !googleKey) {
+    return res.status(503).json({
+      error: "GOOGLE_MAPS_API_KEY is required for production venue discovery.",
+      code: "maps_not_configured"
+    });
+  }
+
   if (googleKey) {
     try {
       const query = [vibe, "bars clubs nightlife", city].filter(Boolean).join(" ");
@@ -181,6 +189,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     mapsConfigured: Boolean(googleKey),
+    mapsRequired: requireGoogleMaps,
     storage: "local-json"
   });
 });

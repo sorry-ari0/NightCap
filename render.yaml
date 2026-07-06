@@ -10,3 +10,5 @@ services:
         value: production
       - key: GOOGLE_MAPS_API_KEY
         sync: false
+      - key: REQUIRE_GOOGLE_MAPS
+        value: "true"
