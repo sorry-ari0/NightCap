@@ -1,8 +1,8 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertCircle, Bookmark, CalendarClock, Copy, Database, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
+import { AlertCircle, Bookmark, CalendarClock, Copy, Database, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, UserRound, Users } from "lucide-react";
 import "./styles.css";
 
 const categories = [
@@ -15,6 +15,10 @@ const categories = [
 ];
 
 const cityOptions = ["New York", "San Francisco", "Los Angeles"];
+const initialVenueCardLimit = 20;
+const venueCardLimitStep = 20;
+const initialPhotoLoadLimit = 6;
+const photoLoadStep = 4;
 const clientSeedVenues = [
   { id: "client-nightmoves", canonicalVenueKey: "nightmoves-new-york", name: "Nightmoves", address: "Williamsburg, Brooklyn, NY", city: "New York", types: ["bar", "night_club"], location: { lat: 40.7147, lng: -73.9614 }, categoryScores: {}, recentComments: [] },
   { id: "client-le-bain", canonicalVenueKey: "le-bain-new-york", name: "Le Bain", address: "Meatpacking District, New York, NY", city: "New York", types: ["bar", "night_club"], location: { lat: 40.7409, lng: -74.0088 }, categoryScores: {}, recentComments: [] },
@@ -56,6 +60,7 @@ function App() {
   const [source, setSource] = useState("seed");
   const [loading, setLoading] = useState(false);
   const [selectedVenue, setSelectedVenue] = useState(null);
+  const [detailVenue, setDetailVenue] = useState(null);
   const [priorities, setPriorities] = useState(["vibes", "people"]);
   const [groupSize, setGroupSize] = useState(1);
   const [plan, setPlan] = useState([]);
@@ -63,6 +68,11 @@ function App() {
   const [inviteContact, setInviteContact] = useState("");
   const [contactsRaw, setContactsRaw] = useState("Maya Chen <maya@example.com>\nAlex Kim <alex@example.com>\nNina Patel <nina@example.com>");
   const [contactGraph, setContactGraph] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [profileForm, setProfileForm] = useState({ name: "", email: "", phone: "", password: "", profilePhoto: "" });
+  const [resetForm, setResetForm] = useState({ contact: "", token: "", password: "" });
+  const [resetNotice, setResetNotice] = useState("");
+  const [feedbackMessage, setFeedbackMessage] = useState("");
   const [health, setHealth] = useState(null);
   const [ranking, setRanking] = useState(null);
   const [shareCard, setShareCard] = useState(null);
@@ -74,6 +84,9 @@ function App() {
   const [userLocation, setUserLocation] = useState(null);
   const [nearMeLoading, setNearMeLoading] = useState(false);
   const [activeView, setActiveView] = useState("spots");
+  const [visibleMapVenueIds, setVisibleMapVenueIds] = useState([]);
+  const [visibleVenueCardLimit, setVisibleVenueCardLimit] = useState(initialVenueCardLimit);
+  const [photoLoadLimit, setPhotoLoadLimit] = useState(initialPhotoLoadLimit);
   const [sessionId] = useState(getNightcapSession);
 
   async function apiFetch(path, options = {}) {
@@ -104,17 +117,24 @@ function App() {
         params.set("lng", String(locationOverride.lng));
         params.set("radiusMeters", String(locationOverride.radiusMeters || 5000));
       }
-      const data = await apiFetch(`/api/venues?${params}`);
+      const data = await apiFetch(`/api/venues?${params}`, { timeout: 45000 });
       setVenues(data.venues);
+      setVisibleVenueCardLimit(initialVenueCardLimit);
       setSource(data.source);
       setFallbackReason(data.fallbackReason || "");
       setMapData(data.map || buildMapData(data.venues));
       setCacheStatus(data.cacheStatus || "");
     } catch (loadError) {
+      if (venues.length > clientSeedVenues.length) {
+        setFallbackReason("Keeping stored venue data after a refresh failed.");
+        setError(loadError.name === "AbortError" ? "Refresh timed out, keeping stored venues." : loadError.message);
+        return;
+      }
       const normalizedCity = city.toLowerCase();
       const fallbackVenues = clientSeedVenues.filter((venue) => venue.city.toLowerCase().includes(normalizedCity) || normalizedCity.includes(venue.city.toLowerCase()));
       const localVenues = fallbackVenues.length ? fallbackVenues : clientSeedVenues;
       setVenues(localVenues);
+      setVisibleVenueCardLimit(initialVenueCardLimit);
       setSource("seed");
       setMapData(buildMapData(localVenues));
       setCacheStatus("local");
@@ -189,6 +209,24 @@ function App() {
     }
   }
 
+  async function loadProfile() {
+    try {
+      const data = await apiFetch("/api/profile", { timeout: 5000 });
+      setProfile(data.profile);
+      if (data.profile) {
+        setProfileForm({
+          name: data.profile.name || "",
+          email: data.profile.email || "",
+          phone: data.profile.phone || "",
+          password: "",
+          profilePhoto: data.profile.profilePhoto || ""
+        });
+      }
+    } catch {
+      setProfile(null);
+    }
+  }
+
   async function loadRanking() {
     try {
       const data = await apiFetch("/api/rankings/me", { timeout: 5000 });
@@ -232,6 +270,7 @@ function App() {
     loadHealth();
     loadRanking();
     loadContacts();
+    loadProfile();
   }, []);
 
   async function saveVenue(venue) {
@@ -306,13 +345,102 @@ function App() {
     }
   }
 
+  async function saveProfile(event) {
+    event.preventDefault();
+    try {
+      const data = await apiFetch("/api/profile", {
+        method: "POST",
+        body: JSON.stringify({
+          ...profileForm,
+          password: profileForm.password || undefined
+        })
+      });
+      setProfile(data.profile);
+      setProfileForm((form) => ({ ...form, password: "", profilePhoto: data.profile.profilePhoto || "" }));
+      setNotice("Account saved.");
+      setError("");
+      setActiveView("friends");
+    } catch (profileError) {
+      setNotice("");
+      setError(profileError.message);
+    }
+  }
+
+  async function sendFeedback(event) {
+    event.preventDefault();
+    try {
+      await apiFetch("/api/feedback", {
+        method: "POST",
+        body: JSON.stringify({ message: feedbackMessage, path: window.location.pathname })
+      });
+      setFeedbackMessage("");
+      setNotice("Feedback sent.");
+      setError("");
+    } catch (feedbackError) {
+      setNotice("");
+      setError(feedbackError.message);
+    }
+  }
+
+  function handleProfilePhoto(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Choose an image file.");
+      return;
+    }
+    if (file.size > 1_800_000) {
+      setError("Profile picture must be under 1.8MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setError("");
+      setProfileForm((form) => ({ ...form, profilePhoto: String(reader.result || "") }));
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function requestPasswordReset(event) {
+    event.preventDefault();
+    try {
+      const data = await apiFetch("/api/password/reset-request", {
+        method: "POST",
+        body: JSON.stringify({ contact: resetForm.contact })
+      });
+      setResetForm((form) => ({ ...form, token: data.resetToken || "" }));
+      setResetNotice(data.resetToken ? "Reset code created. It is filled in for this local build." : "Reset link sent.");
+      setNotice("");
+      setError("");
+    } catch (resetError) {
+      setResetNotice("");
+      setError(resetError.message);
+    }
+  }
+
+  async function resetPassword(event) {
+    event.preventDefault();
+    try {
+      await apiFetch("/api/password/reset", {
+        method: "POST",
+        body: JSON.stringify({ token: resetForm.token, password: resetForm.password })
+      });
+      setResetForm({ contact: "", token: "", password: "" });
+      setResetNotice("Password reset.");
+      setError("");
+    } catch (resetError) {
+      setResetNotice("");
+      setError(resetError.message);
+    }
+  }
+
   async function generatePlan() {
     setError("");
     setNotice("");
     try {
       const data = await apiFetch("/api/plans", {
         method: "POST",
-        body: JSON.stringify({ venues, priorities, groupSize })
+        body: JSON.stringify({ venues: venues.map(plannerVenuePayload), priorities, groupSize })
       });
       setPlan(data.plan);
       await loadProgress();
@@ -420,11 +548,34 @@ function App() {
   }, [venues]);
 
   const groupPlannerLocked = groupSize > 1 && (progress?.inviteCount ?? 0) < 2;
+  const visibleVenueIdSet = useMemo(() => new Set(visibleMapVenueIds), [visibleMapVenueIds]);
+  const mapVisibleVenues = useMemo(() => {
+    if (!visibleMapVenueIds.length) return venues;
+    return venues.filter((venue) => visibleVenueIdSet.has(venue.id));
+  }, [venues, visibleMapVenueIds, visibleVenueIdSet]);
+  const displayedMapVenues = useMemo(() => mapVisibleVenues.slice(0, visibleVenueCardLimit), [mapVisibleVenues, visibleVenueCardLimit]);
+  const hiddenMapVenueCount = Math.max(mapVisibleVenues.length - displayedMapVenues.length, 0);
+  const handleVisibleVenuesChange = useCallback((venueIds) => {
+    setVisibleMapVenueIds(venueIds);
+    setVisibleVenueCardLimit(initialVenueCardLimit);
+    setPhotoLoadLimit(initialPhotoLoadLimit);
+  }, []);
+  useEffect(() => {
+    setPhotoLoadLimit(initialPhotoLoadLimit);
+  }, [visibleVenueCardLimit, visibleMapVenueIds]);
+  useEffect(() => {
+    if (photoLoadLimit >= displayedMapVenues.length) return undefined;
+    const timeout = window.setTimeout(() => {
+      setPhotoLoadLimit((limit) => Math.min(limit + photoLoadStep, displayedMapVenues.length));
+    }, 900);
+    return () => window.clearTimeout(timeout);
+  }, [displayedMapVenues.length, photoLoadLimit]);
   const appTabs = [
     { id: "spots", label: "Spots", icon: Search },
     { id: "friends", label: "Friends", icon: Users },
     { id: "plan", label: "Plan", icon: SlidersHorizontal },
-    { id: "ranking", label: "Ranking", icon: Star }
+    { id: "ranking", label: "Ranking", icon: Star },
+    { id: "account", label: "Account", icon: UserRound }
   ];
 
   return (
@@ -458,13 +609,23 @@ function App() {
         {appTabs.map((tab) => {
           const Icon = tab.icon;
           return (
-            <button key={tab.id} className={activeView === tab.id ? "app-tab active" : "app-tab"} onClick={() => setActiveView(tab.id)}>
+            <button
+              key={tab.id}
+              type="button"
+              className={activeView === tab.id ? "app-tab active" : "app-tab"}
+              onClick={() => setActiveView(tab.id)}
+              onPointerUp={(event) => {
+                if (event.pointerType === "touch") setActiveView(tab.id);
+              }}
+            >
               <Icon size={18} />
               <span>{tab.label}</span>
             </button>
           );
         })}
       </nav>
+
+      <ActivationChecklist profile={profile} progress={progress} ranking={ranking} onNavigate={setActiveView} />
 
       {(error || notice) && (
         <div className={error ? "banner error" : "banner"}>
@@ -497,12 +658,6 @@ function App() {
             </button>
           </section>
 
-          <section className="status-bar">
-            <span>{health?.mapsConfigured ? "Maps connected" : "Maps key not set, using seed venues"}</span>
-            <span>Storage: {health?.storage ?? "checking"}</span>
-            <span>{cacheStatus === "hit" ? "Cached Places data" : source === "google" ? "Live Google Places results" : (fallbackReason || "Demo data active")}</span>
-          </section>
-
           <section className="venues">
             <div className="section-heading">
               <CalendarClock size={18} />
@@ -510,13 +665,23 @@ function App() {
               <span className="source">{sourceLabel(source, cacheStatus)}</span>
             </div>
 
-            <VenueMap mapData={mapData} venues={venues} />
+            <VenueMap mapData={mapData} venues={venues} onVisibleVenuesChange={handleVisibleVenuesChange} />
 
+            <div className="map-results-head">
+              <strong>{mapVisibleVenues.length}</strong>
+              <span>places visible in this map view</span>
+              {hiddenMapVenueCount > 0 && <small>Showing {displayedMapVenues.length} to keep photos fast.</small>}
+            </div>
             <div className="venue-grid">
-              {venues.map((venue) => (
-                <VenueCard key={venue.id} venue={venue} onRate={setSelectedVenue} onSave={saveVenue} />
+              {displayedMapVenues.map((venue, index) => (
+                <VenueCard key={venue.id} venue={venue} loadPhoto={index < photoLoadLimit} onOpen={setDetailVenue} onRate={setSelectedVenue} onSave={saveVenue} />
               ))}
             </div>
+            {hiddenMapVenueCount > 0 && (
+              <button type="button" className="secondary load-more" onClick={() => setVisibleVenueCardLimit((limit) => limit + venueCardLimitStep)}>
+                Show {Math.min(venueCardLimitStep, hiddenMapVenueCount)} more spots
+              </button>
+            )}
           </section>
         </>
       )}
@@ -598,7 +763,13 @@ function App() {
           )}
 
           {!ranking?.inviteGate?.unlocked && (
-            <p className="helper-text">Invite {ranking?.inviteGate?.remaining ?? 3} more friend{(ranking?.inviteGate?.remaining ?? 3) === 1 ? "" : "s"} to publish and share your ranking.</p>
+            <div className="ranking-gate">
+              <p className="helper-text">Invite {ranking?.inviteGate?.remaining ?? 3} more friend{(ranking?.inviteGate?.remaining ?? 3) === 1 ? "" : "s"} to publish and share your ranking.</p>
+              <button className="secondary full" onClick={() => setActiveView("friends")}>
+                <Users size={18} />
+                Invite friends
+              </button>
+            </div>
           )}
           {ranking?.published && ranking.shareUrl && (
             <a className="public-link" href={appPath(ranking.shareUrl)}>
@@ -680,6 +851,84 @@ function App() {
       </section>
       )}
 
+      {activeView === "account" && (
+        <section className="account-section">
+          <div className="account-copy">
+            <p className="eyebrow">Account</p>
+            <h2>{profile ? `Signed in as ${profile.name}` : "Save your NightCap profile."}</h2>
+            <p>Your profile lets NightCap remember your ratings, connect friend recommendations, and carry the same identity into the future mobile app.</p>
+            <div className="profile-preview">
+              {profileForm.profilePhoto ? <img src={profileForm.profilePhoto} alt="" /> : <UserRound size={32} />}
+              <div>
+                <strong>{profile?.name || profileForm.name || "Your profile"}</strong>
+                <span>{profile?.hasPassword ? "Password saved" : "Password needed"}</span>
+              </div>
+            </div>
+          </div>
+
+          <form className="account-form" onSubmit={saveProfile}>
+            <label className="photo-upload">
+              <span>Profile picture</span>
+              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleProfilePhoto} />
+            </label>
+            <label>
+              <span>Name</span>
+              <input value={profileForm.name} onChange={(event) => setProfileForm((form) => ({ ...form, name: event.target.value }))} placeholder="Your name" />
+            </label>
+            <label>
+              <span>Email</span>
+              <input value={profileForm.email} onChange={(event) => setProfileForm((form) => ({ ...form, email: event.target.value }))} placeholder="you@example.com" />
+            </label>
+            <label>
+              <span>Phone</span>
+              <input value={profileForm.phone} onChange={(event) => setProfileForm((form) => ({ ...form, phone: event.target.value }))} placeholder="+1 555 0100" />
+            </label>
+            <label>
+              <span>{profile?.hasPassword ? "New password" : "Password"}</span>
+              <input type="password" value={profileForm.password} onChange={(event) => setProfileForm((form) => ({ ...form, password: event.target.value }))} placeholder="At least 8 characters" autoComplete="new-password" />
+            </label>
+            <button className="primary full" type="submit">
+              <UserRound size={18} />
+              {profile ? "Update account" : "Sign up"}
+            </button>
+          </form>
+
+          <div className="account-tools">
+            <form className="password-form" onSubmit={requestPasswordReset}>
+              <label>
+                <span>Reset password</span>
+                <input value={resetForm.contact} onChange={(event) => setResetForm((form) => ({ ...form, contact: event.target.value }))} placeholder="Email or phone" />
+              </label>
+              <button className="secondary full" type="submit">Send reset</button>
+            </form>
+
+            <form className="password-form" onSubmit={resetPassword}>
+              <label>
+                <span>Reset code</span>
+                <input value={resetForm.token} onChange={(event) => setResetForm((form) => ({ ...form, token: event.target.value }))} placeholder="Paste reset code" />
+              </label>
+              <label>
+                <span>New password</span>
+                <input type="password" value={resetForm.password} onChange={(event) => setResetForm((form) => ({ ...form, password: event.target.value }))} placeholder="At least 8 characters" autoComplete="new-password" />
+              </label>
+              <button className="secondary full" type="submit">Reset password</button>
+              {resetNotice && <p className="helper-text">{resetNotice}</p>}
+            </form>
+          </div>
+
+          <form className="feedback-form" onSubmit={sendFeedback}>
+            <label>
+              <span>Send feedback</span>
+              <textarea value={feedbackMessage} onChange={(event) => setFeedbackMessage(event.target.value)} placeholder="Tell us what broke, what felt off, or what should be better." />
+            </label>
+            <button className="secondary full" type="submit">
+              <MessageSquare size={18} />
+              Send feedback
+            </button>
+          </form>
+        </section>
+      )}
+
       {selectedVenue && (
         <RatingModal
           venue={selectedVenue}
@@ -687,8 +936,81 @@ function App() {
           onSubmit={submitRating}
         />
       )}
+      {detailVenue && (
+        <VenueDetailModal
+          venue={detailVenue}
+          onClose={() => setDetailVenue(null)}
+          onRate={(venue) => {
+            setDetailVenue(null);
+            setSelectedVenue(venue);
+          }}
+        />
+      )}
     </main>
   );
+}
+
+function ActivationChecklist({ profile, progress, ranking, onNavigate }) {
+  const steps = [
+    { id: "profile", label: "Save profile", done: Boolean(profile), action: "Sign up", view: "account" },
+    { id: "rate", label: "Rate one spot", done: (progress?.ratingCount ?? 0) > 0, action: "Find spots", view: "spots" },
+    { id: "invite", label: "Invite friends", done: (progress?.inviteCount ?? 0) >= 3, action: "Invite", view: "friends" },
+    { id: "share", label: "Publish ranking", done: Boolean(ranking?.published), action: "Share", view: "ranking" }
+  ];
+  const completed = steps.filter((step) => step.done).length;
+  const nextStep = steps.find((step) => !step.done) || steps[steps.length - 1];
+
+  return (
+    <section className="activation-strip" aria-label="Getting started">
+      <div className="activation-copy">
+        <p className="eyebrow">Start here</p>
+        <strong>{completed === steps.length ? "Your NightCap graph is live." : "Build your nightlife graph."}</strong>
+        <span>{completed}/{steps.length} complete</span>
+      </div>
+      <div className="activation-steps">
+        {steps.map((step) => (
+          <button key={step.id} type="button" className={step.done ? "activation-step done" : "activation-step"} onClick={() => onNavigate(step.view)}>
+            <span>{step.done ? "✓" : ""}</span>
+            {step.label}
+          </button>
+        ))}
+      </div>
+      <button type="button" className="primary activation-cta" onClick={() => onNavigate(nextStep.view)}>
+        {nextStep.action}
+      </button>
+    </section>
+  );
+}
+
+function plannerVenuePayload(venue) {
+  return {
+    id: venue.id,
+    canonicalVenueKey: venue.canonicalVenueKey,
+    name: venue.name,
+    address: venue.address,
+    neighborhood: venue.neighborhood,
+    city: venue.city,
+    types: venue.types || [],
+    location: venue.location,
+    googleRating: venue.googleRating ?? null,
+    overallScore: venue.overallScore ?? null,
+    ratingCount: venue.ratingCount || 0,
+    saved: Boolean(venue.saved),
+    categoryScores: venue.categoryScores || {}
+  };
+}
+
+function venueDisplayScore(venue) {
+  if (venue.overallScore !== null && venue.overallScore !== undefined) {
+    return { value: venue.overallScore, label: "NightCap" };
+  }
+  if (venue.yelpRating !== null && venue.yelpRating !== undefined) {
+    return { value: venue.yelpRating, label: "Yelp" };
+  }
+  if (venue.googleRating !== null && venue.googleRating !== undefined) {
+    return { value: venue.googleRating, label: "Reviews" };
+  }
+  return { value: null, label: "Unrated" };
 }
 
 function ContactGraph({ graph, onInvite }) {
@@ -776,8 +1098,10 @@ function buildMapData(venues) {
   };
 }
 
-function VenueMap({ mapData, venues }) {
+function VenueMap({ mapData, venues, onVisibleVenuesChange }) {
   const [activeId, setActiveId] = useState(null);
+  const [locationStatus, setLocationStatus] = useState("");
+  const userMarkerRef = useRef(null);
   const mapRef = useRef(null);
   const mapNodeRef = useRef(null);
   const markerLayerRef = useRef(null);
@@ -789,8 +1113,102 @@ function VenueMap({ mapData, venues }) {
     if (!mapNodeRef.current || mapRef.current) return;
     mapRef.current = L.map(mapNodeRef.current, {
       zoomControl: false,
-      scrollWheelZoom: false
+      scrollWheelZoom: true,
+      touchZoom: "center",
+      dragging: true,
+      tap: true,
+      bounceAtZoomLimits: false,
+      zoomSnap: 0.25
     }).setView([40.7128, -74.0060], 12);
+    mapRef.current.touchZoom.enable();
+    mapRef.current.dragging.enable();
+    mapRef.current.scrollWheelZoom.enable();
+    mapNodeRef.current.__nightcapMap = mapRef.current;
+    mapNodeRef.current.__nightcapPinchMoves = 0;
+    const mapNode = mapNodeRef.current;
+    let pinchState = null;
+    const activePointers = new Map();
+    function keepPinchOnMap(event) {
+      if (event.touches?.length > 1) {
+        event.preventDefault();
+      }
+    }
+    function touchDistance(touches) {
+      const first = touches[0];
+      const second = touches[1];
+      return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+    }
+    function touchCenter(touches) {
+      const first = touches[0];
+      const second = touches[1];
+      const rect = mapNode.getBoundingClientRect();
+      return L.point(((first.clientX + second.clientX) / 2) - rect.left, ((first.clientY + second.clientY) / 2) - rect.top);
+    }
+    function handlePinchStart(event) {
+      if (event.touches.length !== 2 || !mapRef.current) return;
+      pinchState = {
+        distance: touchDistance(event.touches),
+        zoom: mapRef.current.getZoom()
+      };
+    }
+    function handlePinchMove(event) {
+      if (event.touches.length !== 2 || !pinchState || !mapRef.current) return;
+      event.preventDefault();
+      const nextDistance = touchDistance(event.touches);
+      if (!pinchState.distance || !nextDistance) return;
+      const zoomDelta = Math.log2(nextDistance / pinchState.distance);
+      const nextZoom = Math.max(mapRef.current.getMinZoom(), Math.min(mapRef.current.getMaxZoom(), pinchState.zoom + zoomDelta));
+      mapNode.__nightcapPinchMoves += 1;
+      mapRef.current.setZoom(nextZoom, { animate: false });
+    }
+    function handlePinchEnd(event) {
+      if (event.touches.length < 2) pinchState = null;
+    }
+    function pointerDistance() {
+      const pointers = Array.from(activePointers.values());
+      if (pointers.length < 2) return 0;
+      return Math.hypot(pointers[1].clientX - pointers[0].clientX, pointers[1].clientY - pointers[0].clientY);
+    }
+    function pointerCenter() {
+      const pointers = Array.from(activePointers.values());
+      const rect = mapNode.getBoundingClientRect();
+      return L.point(((pointers[0].clientX + pointers[1].clientX) / 2) - rect.left, ((pointers[0].clientY + pointers[1].clientY) / 2) - rect.top);
+    }
+    function handlePointerDown(event) {
+      if (event.pointerType !== "touch") return;
+      activePointers.set(event.pointerId, event);
+      if (activePointers.size === 2 && mapRef.current) {
+        pinchState = {
+          distance: pointerDistance(),
+          zoom: mapRef.current.getZoom()
+        };
+      }
+    }
+    function handlePointerMove(event) {
+      if (event.pointerType !== "touch" || !activePointers.has(event.pointerId)) return;
+      activePointers.set(event.pointerId, event);
+      if (activePointers.size !== 2 || !pinchState || !mapRef.current) return;
+      event.preventDefault();
+      const nextDistance = pointerDistance();
+      if (!pinchState.distance || !nextDistance) return;
+      const zoomDelta = Math.log2(nextDistance / pinchState.distance);
+      const nextZoom = Math.max(mapRef.current.getMinZoom(), Math.min(mapRef.current.getMaxZoom(), pinchState.zoom + zoomDelta));
+      mapNode.__nightcapPinchMoves += 1;
+      mapRef.current.setZoom(nextZoom, { animate: false });
+    }
+    function handlePointerEnd(event) {
+      activePointers.delete(event.pointerId);
+      if (activePointers.size < 2) pinchState = null;
+    }
+    mapNode.addEventListener("touchmove", keepPinchOnMap, { passive: false });
+    mapNode.addEventListener("touchstart", handlePinchStart, { passive: true });
+    mapNode.addEventListener("touchmove", handlePinchMove, { passive: false });
+    mapNode.addEventListener("touchend", handlePinchEnd, { passive: true });
+    mapNode.addEventListener("touchcancel", handlePinchEnd, { passive: true });
+    mapNode.addEventListener("pointerdown", handlePointerDown, { passive: true });
+    mapNode.addEventListener("pointermove", handlePointerMove, { passive: false });
+    mapNode.addEventListener("pointerup", handlePointerEnd, { passive: true });
+    mapNode.addEventListener("pointercancel", handlePointerEnd, { passive: true });
     L.control.zoom({ position: "bottomright" }).addTo(mapRef.current);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -799,6 +1217,16 @@ function VenueMap({ mapData, venues }) {
     markerLayerRef.current = L.layerGroup().addTo(mapRef.current);
 
     return () => {
+      mapNode.removeEventListener("touchmove", keepPinchOnMap);
+      mapNode.removeEventListener("touchstart", handlePinchStart);
+      mapNode.removeEventListener("touchmove", handlePinchMove);
+      mapNode.removeEventListener("touchend", handlePinchEnd);
+      mapNode.removeEventListener("touchcancel", handlePinchEnd);
+      mapNode.removeEventListener("pointerdown", handlePointerDown);
+      mapNode.removeEventListener("pointermove", handlePointerMove);
+      mapNode.removeEventListener("pointerup", handlePointerEnd);
+      mapNode.removeEventListener("pointercancel", handlePointerEnd);
+      delete mapNode.__nightcapMap;
       mapRef.current?.remove();
       mapRef.current = null;
       markerLayerRef.current = null;
@@ -808,11 +1236,9 @@ function VenueMap({ mapData, venues }) {
   useEffect(() => {
     if (!mapRef.current || !markerLayerRef.current) return;
     markerLayerRef.current.clearLayers();
-    const latLngs = [];
     for (const point of points) {
       const venue = venueById.get(point.id);
       const latLng = L.latLng(point.lat, point.lng);
-      latLngs.push(latLng);
       const marker = L.circleMarker(latLng, {
         radius: point.id === activePoint?.id ? 9 : 7,
         color: "#f8eef6",
@@ -824,13 +1250,70 @@ function VenueMap({ mapData, venues }) {
       marker.on("click", () => setActiveId(point.id));
       marker.addTo(markerLayerRef.current);
     }
+  }, [points, activePoint?.id, venues]);
 
+  useEffect(() => {
+    if (!mapRef.current) return;
+    function updateVisibleVenues() {
+      if (!mapRef.current) return;
+      const bounds = mapRef.current.getBounds();
+      const visibleIds = points
+        .filter((point) => bounds.contains([point.lat, point.lng]))
+        .map((point) => point.id);
+      onVisibleVenuesChange(visibleIds);
+    }
+    mapRef.current.on("moveend zoomend", updateVisibleVenues);
+    setTimeout(updateVisibleVenues, 0);
+    return () => {
+      mapRef.current?.off("moveend zoomend", updateVisibleVenues);
+    };
+  }, [points, onVisibleVenuesChange]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const latLngs = denseMapLatLngs(points);
     if (latLngs.length === 1) {
       mapRef.current.setView(latLngs[0], 14);
     } else if (latLngs.length > 1) {
-      mapRef.current.fitBounds(L.latLngBounds(latLngs), { padding: [28, 28], maxZoom: 14 });
+      setTimeout(() => {
+        mapRef.current?.invalidateSize();
+        mapRef.current?.fitBounds(L.latLngBounds(latLngs), { padding: [34, 34], maxZoom: 15 });
+        setTimeout(() => {
+          if (!mapRef.current) return;
+          const bounds = mapRef.current.getBounds();
+          onVisibleVenuesChange(points.filter((point) => bounds.contains([point.lat, point.lng])).map((point) => point.id));
+        }, 0);
+      }, 0);
     }
-  }, [points, activePoint?.id, venues]);
+  }, [points, onVisibleVenuesChange]);
+
+  function centerToUserLocation() {
+    if (!navigator.geolocation || !mapRef.current) {
+      setLocationStatus("Location unavailable");
+      return;
+    }
+    setLocationStatus("Locating...");
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const latLng = L.latLng(position.coords.latitude, position.coords.longitude);
+        if (!userMarkerRef.current) {
+          userMarkerRef.current = L.circleMarker(latLng, {
+            radius: 8,
+            color: "#f8eef6",
+            weight: 2,
+            fillColor: "#e86aa7",
+            fillOpacity: 1
+          }).addTo(mapRef.current);
+        } else {
+          userMarkerRef.current.setLatLng(latLng);
+        }
+        mapRef.current.setView(latLng, 15, { animate: true });
+        setLocationStatus("Centered");
+      },
+      () => setLocationStatus("Location blocked"),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+    );
+  }
 
   return (
     <div className="venue-map" aria-label="Stored venue map">
@@ -843,9 +1326,30 @@ function VenueMap({ mapData, venues }) {
           <span>{points.length} points</span>
           <span>{activePoint?.source || "stored"}</span>
         </div>
+        <button className="secondary full" type="button" onClick={centerToUserLocation}>
+          <MapPin size={17} />
+          Center my location
+        </button>
+        {locationStatus && <small className="map-status">{locationStatus}</small>}
       </div>
     </div>
   );
+}
+
+function denseMapLatLngs(points) {
+  const validPoints = points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+  if (validPoints.length <= 30) return validPoints.map((point) => L.latLng(point.lat, point.lng));
+  const lats = validPoints.map((point) => point.lat).sort((a, b) => a - b);
+  const lngs = validPoints.map((point) => point.lng).sort((a, b) => a - b);
+  const lowIndex = Math.floor(validPoints.length * 0.05);
+  const highIndex = Math.ceil(validPoints.length * 0.95) - 1;
+  const south = lats[lowIndex];
+  const north = lats[highIndex];
+  const west = lngs[lowIndex];
+  const east = lngs[highIndex];
+  return validPoints
+    .filter((point) => point.lat >= south && point.lat <= north && point.lng >= west && point.lng <= east)
+    .map((point) => L.latLng(point.lat, point.lng));
 }
 
 function escapeHtml(value) {
@@ -914,16 +1418,28 @@ function PublicRankingPage({ handle, slug }) {
   );
 }
 
-function VenueCard({ venue, onRate, onSave }) {
-  const score = venue.overallScore ?? venue.googleRating;
+function VenueCard({ venue, loadPhoto, onOpen, onRate, onSave }) {
+  const displayScore = venueDisplayScore(venue);
   const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${venue.name} ${venue.address || venue.city}`)}`;
-  const photoStyle = venue.photoUrl
-    ? { backgroundImage: `url(${appPath(venue.photoUrl)})` }
-    : undefined;
+  const websiteUrl = venue.websiteUrl || `https://www.google.com/search?q=${encodeURIComponent(`${venue.name} ${venue.address || venue.city} official website`)}`;
   return (
     <article className="venue-card">
-      <div className="venue-photo" style={photoStyle}>
-        <button className={venue.saved ? "icon saved" : "icon"} onClick={() => onSave(venue)} aria-label="Save venue">
+      <div
+        className="venue-photo"
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen(venue)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") onOpen(venue);
+        }}
+        aria-label={`View ${venue.name} details`}
+      >
+        {venue.photoUrl && loadPhoto && <img src={appPath(venue.photoUrl)} alt="" loading="lazy" decoding="async" />}
+        <span className="photo-action">View details</span>
+        <button className={venue.saved ? "icon saved" : "icon"} onClick={(event) => {
+          event.stopPropagation();
+          onSave(venue);
+        }} aria-label="Save venue">
           <Bookmark size={18} />
         </button>
       </div>
@@ -933,7 +1449,10 @@ function VenueCard({ venue, onRate, onSave }) {
             <h3>{venue.name}</h3>
             <p><MapPin size={14} /> {venue.neighborhood || venue.address}</p>
           </div>
-          <div className="score">{score ?? "New"}</div>
+          <div className="score">
+            <b>{displayScore.value ?? "New"}</b>
+            <small>{displayScore.label}</small>
+          </div>
         </div>
 
         <div className="mini-scores">
@@ -951,12 +1470,10 @@ function VenueCard({ venue, onRate, onSave }) {
             <Star size={17} />
             Rate
           </button>
-          {venue.websiteUrl && (
-            <a className="secondary full link-button" href={venue.websiteUrl} target="_blank" rel="noreferrer">
-              <ExternalLink size={17} />
-              Website
-            </a>
-          )}
+          <a className="secondary full link-button" href={websiteUrl} target="_blank" rel="noreferrer">
+            <ExternalLink size={17} />
+            Website
+          </a>
           <a className="secondary full link-button" href={mapsUrl} target="_blank" rel="noreferrer">
             <ExternalLink size={17} />
             Map
@@ -964,6 +1481,84 @@ function VenueCard({ venue, onRate, onSave }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function VenueDetailModal({ venue, onClose, onRate }) {
+  const titleId = useId();
+  const displayScore = venueDisplayScore(venue);
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${venue.name} ${venue.address || venue.city}`)}`;
+  const websiteUrl = venue.websiteUrl || `https://www.google.com/search?q=${encodeURIComponent(`${venue.name} ${venue.address || venue.city} official website`)}`;
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <article className="modal venue-detail-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="venue-detail-photo">
+          {venue.photoUrl && <img src={appPath(venue.photoUrl)} alt="" loading="eager" decoding="async" />}
+        </div>
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">Venue details</p>
+            <h2 id={titleId}>{venue.name}</h2>
+            <p className="detail-address"><MapPin size={15} /> {venue.address || venue.city || "NightCap venue"}</p>
+          </div>
+          <button type="button" className="close" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="detail-stats">
+          <span><b>{displayScore.value ?? "New"}</b> {displayScore.label}</span>
+          <span><b>{venue.ratingCount || 0}</b> NightCap ratings</span>
+          <span><b>{venue.yelpReviewCount ?? venue.userRatingCount ?? "-"}</b> external reviews</span>
+        </div>
+
+        <div className="mini-scores detail-scores">
+          {categories.map((category) => (
+            <span key={category.key}>{category.label} <b>{venue.categoryScores?.[category.key] ?? "-"}</b></span>
+          ))}
+        </div>
+
+        {venue.types?.length > 0 && (
+          <div className="detail-tags">
+            {venue.types.slice(0, 8).map((type) => <span key={type}>{type.replace(/_/g, " ")}</span>)}
+          </div>
+        )}
+
+        {venue.recentComments?.length > 0 && (
+          <div className="detail-comments">
+            <h3>Recent notes</h3>
+            {venue.recentComments.map((comment) => (
+              <p key={`${comment.createdAt}-${comment.comment}`}><MessageSquare size={14} /> {comment.comment}</p>
+            ))}
+          </div>
+        )}
+
+        <div className="venue-actions detail-actions">
+          <button className="primary full" onClick={() => onRate(venue)}>
+            <Star size={17} />
+            Rate
+          </button>
+          <a className="secondary full link-button" href={websiteUrl} target="_blank" rel="noreferrer">
+            <ExternalLink size={17} />
+            Website
+          </a>
+          <a className="secondary full link-button" href={mapsUrl} target="_blank" rel="noreferrer">
+            <ExternalLink size={17} />
+            Map
+          </a>
+        </div>
+      </article>
+    </div>
   );
 }
 

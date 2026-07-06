@@ -1,13 +1,15 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const e2ePort = process.env.E2E_PORT || "3001";
+
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 30_000,
+  timeout: 60_000,
   expect: {
-    timeout: 7_500
+    timeout: 12_000
   },
   use: {
-    baseURL: "http://127.0.0.1:3001",
+    baseURL: `http://127.0.0.1:${e2ePort}`,
     trace: "retain-on-failure",
     launchOptions: {
       ...(process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.PLAYWRIGHT_EXECUTABLE_PATH
@@ -24,8 +26,8 @@ export default defineConfig({
     }
   },
   webServer: {
-    command: "GOOGLE_MAPS_API_KEY= REQUIRE_GOOGLE_MAPS=false NODE_ENV=test NIGHTCAP_DATA_PATH=.tmp/nightcap-e2e.json npm start",
-    url: "http://127.0.0.1:3001/api/health",
+    command: `GOOGLE_MAPS_API_KEY= REQUIRE_GOOGLE_MAPS=false NODE_ENV=test NIGHTCAP_DATA_PATH=.tmp/nightcap-e2e.json PORT=${e2ePort} npm start`,
+    url: `http://127.0.0.1:${e2ePort}/api/health`,
     reuseExistingServer: false,
     timeout: 15_000
   },

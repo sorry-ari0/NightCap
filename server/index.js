@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fallbackVenues } from "./fallbackVenues.js";
@@ -11,13 +12,14 @@ const requireGoogleMaps = process.env.REQUIRE_GOOGLE_MAPS === "true";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.join(__dirname, "..", "dist");
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "4mb" }));
 
 const state = loadState();
 const ratings = state.ratings;
 const sessions = state.sessions;
 const venueCache = state.venueCache;
 const memberDirectory = state.memberDirectory;
+const feedback = state.feedback;
 const venueCacheTtlMs = Number(process.env.VENUE_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
 const nycVenueTargetCount = Number(process.env.NYC_VENUE_TARGET_COUNT || 1000);
 const googleSearchConcurrency = Number(process.env.GOOGLE_SEARCH_CONCURRENCY || 6);
@@ -42,6 +44,8 @@ const seedMembers = [
     contactGraph: ["maya@example.com", "nina@example.com", "cam@example.com", "+13105550122"]
   }
 ];
+
+const passwordResetTtlMs = 1000 * 60 * 20;
 
 function getSession(req) {
   const rawSessionId = String(req.get("x-nightcap-session") || "demo").trim();
@@ -71,7 +75,8 @@ function persist() {
     invites: [],
     sessions,
     venueCache,
-    memberDirectory
+    memberDirectory,
+    feedback
   });
 }
 
@@ -409,12 +414,17 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.get("/favicon.ico", (req, res) => {
+  res.status(204).end();
+});
+
 app.get("/api/google-photo", async (req, res) => {
   if (!googleKey || !req.query.name) {
     return res.status(404).send("Photo unavailable");
   }
 
-  const url = `https://places.googleapis.com/v1/${req.query.name}/media?maxWidthPx=1200&key=${googleKey}`;
+  const width = Math.min(720, Math.max(240, optionalNumber(req.query.width) || 520));
+  const url = `https://places.googleapis.com/v1/${req.query.name}/media?maxWidthPx=${width}&key=${googleKey}`;
   const response = await fetch(url, { redirect: "manual" });
   const location = response.headers.get("location");
 
@@ -487,6 +497,116 @@ app.delete("/api/saved-venues/:venueId", (req, res) => {
 app.get("/api/progress", (req, res) => {
   const { id: sessionId, data: sessionData } = getSession(req);
   res.json(progressPayload(sessionId, sessionData));
+});
+
+app.get("/api/profile", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  res.json(profilePayload(sessionId, sessionData));
+});
+
+app.post("/api/profile", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const name = String(req.body.name || "").trim().slice(0, 80);
+  const email = String(req.body.email || "").trim().slice(0, 120);
+  const phone = String(req.body.phone || "").trim().slice(0, 40);
+  const password = String(req.body.password || "");
+  const profilePhoto = sanitizeProfilePhoto(req.body.profilePhoto);
+
+  if (!name) return res.status(400).json({ error: "name is required" });
+  if (email && !isValidInviteContact(email)) return res.status(400).json({ error: "valid email is required" });
+  if (phone && !isValidInviteContact(phone)) return res.status(400).json({ error: "valid phone number is required" });
+  if (!email && !phone) return res.status(400).json({ error: "email or phone is required" });
+  if (!sessionData.profile && password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
+  if (password && password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
+
+  sessionData.profile = {
+    id: sessionData.profile?.id || `user-${sessionId}`,
+    name,
+    email,
+    phone,
+    normalizedEmail: email ? normalizeContact(email) : "",
+    normalizedPhone: phone ? normalizeContact(phone) : "",
+    profilePhoto: profilePhoto ?? sessionData.profile?.profilePhoto ?? "",
+    passwordHash: password ? hashPassword(password) : sessionData.profile?.passwordHash,
+    passwordUpdatedAt: password ? new Date().toISOString() : sessionData.profile?.passwordUpdatedAt,
+    createdAt: sessionData.profile?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  persist();
+  res.status(201).json(profilePayload(sessionId, sessionData));
+});
+
+app.post("/api/profile/photo", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  if (!sessionData.profile) return res.status(400).json({ error: "sign up before adding a profile picture" });
+  const profilePhoto = sanitizeProfilePhoto(req.body.profilePhoto);
+  if (!profilePhoto) return res.status(400).json({ error: "valid image is required" });
+  sessionData.profile.profilePhoto = profilePhoto;
+  sessionData.profile.updatedAt = new Date().toISOString();
+  persist();
+  res.json(profilePayload(sessionId, sessionData));
+});
+
+app.post("/api/password/reset-request", (req, res) => {
+  const { data: sessionData } = getSession(req);
+  const contact = String(req.body.contact || "").trim().slice(0, 120);
+  if (!contact || !isValidInviteContact(contact)) return res.status(400).json({ error: "valid email or phone is required" });
+
+  const normalized = normalizeContact(contact);
+  const match = findSessionByContact(normalized);
+  const targetSessionData = match?.data || sessionData;
+  if (!targetSessionData.profile) return res.status(404).json({ error: "no account found for that contact" });
+
+  const resetToken = crypto.randomBytes(18).toString("hex");
+  targetSessionData.passwordReset = {
+    token: resetToken,
+    contact: normalized,
+    expiresAt: new Date(Date.now() + passwordResetTtlMs).toISOString(),
+    createdAt: new Date().toISOString()
+  };
+  persist();
+  res.status(201).json({
+    ok: true,
+    expiresAt: targetSessionData.passwordReset.expiresAt,
+    resetToken: process.env.NODE_ENV === "production" ? undefined : resetToken
+  });
+});
+
+app.post("/api/password/reset", (req, res) => {
+  const token = String(req.body.token || "").trim();
+  const password = String(req.body.password || "");
+  if (!token) return res.status(400).json({ error: "reset token is required" });
+  if (password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
+
+  const match = Object.entries(sessions).find(([, sessionData]) => {
+    return sessionData.passwordReset?.token === token && Date.parse(sessionData.passwordReset.expiresAt) > Date.now();
+  });
+  if (!match) return res.status(400).json({ error: "reset link is invalid or expired" });
+
+  const [, sessionData] = match;
+  sessionData.profile.passwordHash = hashPassword(password);
+  sessionData.profile.passwordUpdatedAt = new Date().toISOString();
+  delete sessionData.passwordReset;
+  persist();
+  res.json({ ok: true });
+});
+
+app.post("/api/feedback", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const message = String(req.body.message || "").trim().slice(0, 1500);
+  if (!message) return res.status(400).json({ error: "feedback message is required" });
+
+  const item = {
+    id: `feedback-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    sessionId,
+    profile: sessionData.profile || null,
+    message,
+    path: String(req.body.path || "").slice(0, 200),
+    createdAt: new Date().toISOString()
+  };
+  feedback.push(item);
+  persist();
+  res.status(201).json({ feedback: item });
 });
 
 app.get("/api/contacts", (req, res) => {
@@ -762,6 +882,48 @@ function progressPayload(sessionId, sessionData) {
   };
 }
 
+function profilePayload(sessionId, sessionData) {
+  return {
+    sessionId,
+    signedIn: Boolean(sessionData.profile),
+    profile: publicProfile(sessionData.profile)
+  };
+}
+
+function publicProfile(profile) {
+  if (!profile) return null;
+  return {
+    id: profile.id,
+    name: profile.name,
+    email: profile.email,
+    phone: profile.phone,
+    profilePhoto: profile.profilePhoto || "",
+    hasPassword: Boolean(profile.passwordHash),
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt
+  };
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("hex");
+  return `pbkdf2_sha256$120000$${salt}$${hash}`;
+}
+
+function sanitizeProfilePhoto(value) {
+  if (value === undefined || value === null || value === "") return "";
+  const photo = String(value);
+  if (photo.length > 2_500_000) return null;
+  if (!/^data:image\/(png|jpe?g|webp);base64,[a-z0-9+/=]+$/i.test(photo)) return null;
+  return photo;
+}
+
+function findSessionByContact(normalizedContact) {
+  return Object.entries(sessions).map(([id, data]) => ({ id, data })).find(({ data }) => {
+    return data.profile?.normalizedEmail === normalizedContact || data.profile?.normalizedPhone === normalizedContact;
+  });
+}
+
 function contactGraphPayload(sessionId, sessionData) {
   const contacts = sessionData.contacts || [];
   const members = memberRecords(sessionId);
@@ -989,6 +1151,7 @@ if (process.env.NODE_ENV === "test") {
     ratings.splice(0, ratings.length);
     for (const key of Object.keys(sessions)) delete sessions[key];
     for (const key of Object.keys(venueCache)) delete venueCache[key];
+    feedback.splice(0, feedback.length);
     persist();
     res.json({ ok: true });
   });

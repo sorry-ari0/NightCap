@@ -30,6 +30,40 @@ try {
   const cities = await request("/api/cities");
   assert.deepEqual(cities.launchOrder, ["New York", "San Francisco", "Los Angeles"]);
 
+  const profile = await request("/api/profile", {
+    method: "POST",
+    body: {
+      name: "API Tester",
+      email: "api-tester@example.com",
+      phone: "+15550101010",
+      password: "nightcap-test-password",
+      profilePhoto: "data:image/png;base64,iVBORw0KGgo="
+    }
+  });
+  assert.equal(profile.signedIn, true);
+  assert.equal(profile.profile.name, "API Tester");
+  assert.equal(profile.profile.hasPassword, true);
+  assert.equal(profile.profile.passwordHash, undefined);
+  assert.equal(profile.profile.profilePhoto.startsWith("data:image/png;base64,"), true);
+
+  const resetRequest = await request("/api/password/reset-request", {
+    method: "POST",
+    body: { contact: "api-tester@example.com" }
+  });
+  assert.ok(resetRequest.resetToken);
+
+  const reset = await request("/api/password/reset", {
+    method: "POST",
+    body: { token: resetRequest.resetToken, password: "nightcap-reset-password" }
+  });
+  assert.equal(reset.ok, true);
+
+  const feedback = await request("/api/feedback", {
+    method: "POST",
+    body: { message: "API validation feedback.", path: "/tests" }
+  });
+  assert.ok(feedback.feedback.id.startsWith("feedback-"));
+
   const contacts = await request("/api/contacts/import", {
     method: "POST",
     body: {

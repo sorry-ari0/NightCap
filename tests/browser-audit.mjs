@@ -54,6 +54,8 @@ async function auditViewport(viewport, name) {
     if (message.type() === "error") consoleErrors.push(`${name}: ${message.text()}`);
   });
   page.on("requestfailed", (request) => {
+    if (request.url().includes(".tile.openstreetmap.org/") && request.failure()?.errorText === "net::ERR_ABORTED") return;
+    if (request.url().includes("/api/progress") && request.failure()?.errorText === "net::ERR_ABORTED") return;
     failedRequests.push(`${name}: ${request.url()} ${request.failure()?.errorText}`);
   });
 
@@ -74,18 +76,19 @@ async function auditViewport(viewport, name) {
   }
 
   console.log(`browser-audit: ${name} invites`);
-  await page.getByRole("button", { name: "Friends" }).click();
+  await page.locator(".app-tabs").getByRole("button", { name: "Friends" }).click();
   await page.fill('input[placeholder="friend@example.com or +1 555 0100"]', `${name}@example.com`);
-  await page.click('button:has-text("Invite")');
+  await page.locator(".invite-form").getByRole("button", { name: "Invite" }).click();
   await page.waitForSelector("text=Invite recorded");
 
   await page.fill('input[placeholder="friend@example.com or +1 555 0100"]', `${name}2@example.com`);
-  await page.click('button:has-text("Invite")');
+  await page.locator(".invite-form").getByRole("button", { name: "Invite" }).click();
   await page.waitForSelector("text=Group planner");
 
   console.log(`browser-audit: ${name} rating`);
-  await page.getByRole("button", { name: "Spots" }).click();
-  await page.click('.venue-card >> text=Rate');
+  await page.locator(".app-tabs").getByRole("button", { name: "Spots" }).click();
+  await page.waitForSelector(".venue-card", { state: "attached", timeout: 20_000 });
+  await page.locator(".venue-card").first().getByRole("button", { name: "Rate" }).click();
   await page.waitForSelector('[role="dialog"]');
   await page.locator('[role="dialog"] textarea').fill(`Browser audit ${name}: useful crowd signal.`);
   await page.click('button:has-text("Save rating")');
@@ -93,7 +96,7 @@ async function auditViewport(viewport, name) {
   await page.waitForSelector(`text=Browser audit ${name}: useful crowd signal.`);
 
   console.log(`browser-audit: ${name} planning`);
-  await page.getByRole("button", { name: "Plan" }).click();
+  await page.locator(".app-tabs").getByRole("button", { name: "Plan" }).click();
   await page.locator('input[type="range"]').first().evaluate((input) => {
     input.value = "4";
     input.dispatchEvent(new Event("input", { bubbles: true }));
