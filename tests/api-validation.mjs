@@ -108,15 +108,7 @@ try {
   const inviteTwo = await request("/api/invites", { method: "POST", body: { contact: "friend2@example.com" } });
   assert.equal(inviteTwo.inviteCount, 2);
 
-  await assert.rejects(
-    () => request("/api/rankings/publish", { method: "POST", body: {} }),
-    /Invite 1 more friend/
-  );
-
-  const inviteThree = await request("/api/invites", { method: "POST", body: { contact: "friend3@example.com" } });
-  assert.equal(inviteThree.unlocks.find((unlock) => unlock.id === "public-ranking").unlocked, true);
-
-  await request("/api/ratings", {
+  const ratingPost = await request("/api/ratings", {
     method: "POST",
     body: {
       venueId: venues.venues[0].id,
@@ -129,6 +121,31 @@ try {
       comment: "API audit top spot."
     }
   });
+  assert.equal(ratingPost.post.published, true);
+
+  const posts = await request("/api/posts");
+  assert.equal(posts.posts.some((post) => post.comment === "API audit top spot."), true);
+
+  const lockedRanking = await request("/api/rankings/me");
+  assert.equal(lockedRanking.rankingLocked, true);
+  assert.equal(lockedRanking.ranking.length, 0);
+
+  await assert.rejects(
+    () => request("/api/people/search?q=api"),
+    /unlock people search/
+  );
+
+  await assert.rejects(
+    () => request("/api/rankings/publish", { method: "POST", body: {} }),
+    /Invite 1 more friend/
+  );
+
+  const inviteThree = await request("/api/invites", { method: "POST", body: { contact: "friend3@example.com" } });
+  assert.equal(inviteThree.unlocks.find((unlock) => unlock.id === "public-ranking").unlocked, true);
+
+  const people = await request("/api/people/search?q=api");
+  assert.equal(people.inviteGate.unlocked, true);
+  assert.equal(people.people.some((person) => person.postCount > 0), true);
 
   const publishedRanking = await request("/api/rankings/publish", { method: "POST", body: {} });
   assert.equal(publishedRanking.published, true);

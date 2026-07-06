@@ -772,6 +772,85 @@ button:disabled {
   font-weight: 750;
 }
 
+.ranking-locked {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(232, 106, 167, 0.24);
+  border-radius: 8px;
+  background: rgba(43, 20, 48, 0.58);
+}
+
+.ranking-locked svg {
+  color: var(--accent);
+}
+
+.ranking-locked strong {
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.ranking-locked p {
+  margin: 0;
+  color: rgba(255, 244, 251, 0.64);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.people-search,
+.people-results {
+  display: grid;
+  gap: 8px;
+}
+
+.people-row {
+  display: grid;
+  grid-template-columns: 34px 1fr 54px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(255, 244, 251, 0.1);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.people-row > span,
+.people-row > b {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--ink);
+  font-weight: 950;
+}
+
+.people-row > b {
+  width: 54px;
+  background: var(--accent);
+}
+
+.people-row strong,
+.people-row small,
+.people-row em {
+  display: block;
+}
+
+.people-row strong {
+  color: var(--text);
+}
+
+.people-row small,
+.people-row em {
+  margin-top: 2px;
+  color: rgba(255, 244, 251, 0.58);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
 .ranking-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -75,6 +75,9 @@ function App() {
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [health, setHealth] = useState(null);
   const [ranking, setRanking] = useState(null);
+  const [peopleQuery, setPeopleQuery] = useState("");
+  const [peopleResults, setPeopleResults] = useState([]);
+  const [peopleSearchMessage, setPeopleSearchMessage] = useState("");
   const [shareCard, setShareCard] = useState(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -241,16 +244,8 @@ function App() {
           remaining: Math.max(0, 3 - (progress?.inviteCount ?? 0)),
           unlocked: (progress?.inviteCount ?? 0) >= 3
         },
-        ranking: venues
-          .filter((venue) => Number.isFinite(venue.overallScore))
-          .sort((a, b) => b.overallScore - a.overallScore)
-          .slice(0, 10)
-          .map((venue) => ({
-            name: venue.name,
-            address: venue.address,
-            overallScore: venue.overallScore,
-            comment: venue.recentComments?.[0]?.comment
-          }))
+        rankingLocked: true,
+        ranking: []
       });
     }
   }
@@ -529,6 +524,22 @@ function App() {
     }
   }
 
+  async function searchPeople(event) {
+    event.preventDefault();
+    try {
+      const params = new URLSearchParams();
+      if (peopleQuery.trim()) params.set("q", peopleQuery.trim());
+      const data = await apiFetch(`/api/people/search?${params}`, { timeout: 5000 });
+      setPeopleResults(data.people || []);
+      setPeopleSearchMessage(data.people?.length ? "" : "No ranked people found yet.");
+      setError("");
+    } catch (searchError) {
+      setPeopleResults([]);
+      setPeopleSearchMessage(searchError.message);
+      setError("");
+    }
+  }
+
   async function createShareCard() {
     try {
       const data = await apiFetch("/api/share-cards", {
@@ -730,31 +741,67 @@ function App() {
         <section className="ranking-section">
         <div className="ranking-copy">
           <p className="eyebrow">Public ranking</p>
-          <h2>Your top spots become the growth loop.</h2>
-          <p>Preview your ranking now. Publish and share it after 3 successful invites so the list launches with friends attached.</p>
+          <h2>Your posts publish as you rate.</h2>
+          <p>Ratings become public posts automatically. Invite 3 friends to reveal your own ranking and search top-ranked people based on posts and likes.</p>
         </div>
         <div className="ranking-card">
           <div className="ranking-card-head">
             <div>
               <span className="ranking-kicker">NightCap ranking</span>
-              <strong>{ranking?.published ? "Public" : "Private preview"}</strong>
+              <strong>{ranking?.inviteGate?.unlocked ? (ranking?.published ? "Public" : "Unlocked") : "Locked preview"}</strong>
             </div>
             <span className={ranking?.inviteGate?.unlocked ? "gate-pill unlocked" : "gate-pill"}>
               {ranking?.inviteGate?.unlocked ? "Share unlocked" : `${ranking?.inviteGate?.successfulInvites ?? 0}/3 joined`}
             </span>
           </div>
 
-          <div className="ranking-list">
-            {(ranking?.ranking?.length ? ranking.ranking : venues.slice(0, 3)).slice(0, 5).map((venue, index) => (
-              <div className="ranking-row" key={`${venue.name}-${index}`}>
-                <span>{index + 1}</span>
-                <div>
-                  <strong>{venue.name}</strong>
-                  <small>{venue.overallScore ? `${venue.overallScore} overall` : "Rate to rank"}</small>
-                </div>
+          {ranking?.inviteGate?.unlocked ? (
+            <>
+              <div className="ranking-list">
+                {(ranking?.ranking ?? []).slice(0, 5).map((venue, index) => (
+                  <div className="ranking-row" key={`${venue.name}-${index}`}>
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong>{venue.name}</strong>
+                      <small>{venue.overallScore ? `${venue.overallScore} overall` : "Rate to rank"}</small>
+                    </div>
+                  </div>
+                ))}
+                {!ranking?.ranking?.length && <p className="helper-text">Rate a few venues to build your ranking.</p>}
               </div>
-            ))}
-          </div>
+
+              <form className="people-search" onSubmit={searchPeople}>
+                <label>
+                  <span>Search top-ranked people</span>
+                  <input value={peopleQuery} onChange={(event) => setPeopleQuery(event.target.value)} placeholder="Search by person, venue, or post" />
+                </label>
+                <button className="secondary full" type="submit">
+                  <Search size={18} />
+                  Search people
+                </button>
+              </form>
+              <div className="people-results">
+                {peopleResults.map((person, index) => (
+                  <div className="people-row" key={person.id}>
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong>{person.name}</strong>
+                      <small>{person.postCount} post{person.postCount === 1 ? "" : "s"} · {person.likeCount} like{person.likeCount === 1 ? "" : "s"} · {person.averageScore} avg</small>
+                      {person.topPost && <em>Top post: {person.topPost.venueName}</em>}
+                    </div>
+                    <b>{person.rankScore}</b>
+                  </div>
+                ))}
+                {peopleSearchMessage && <p className="helper-text">{peopleSearchMessage}</p>}
+              </div>
+            </>
+          ) : (
+            <div className="ranking-locked">
+              <Lock size={22} />
+              <strong>Invite 3 friends to reveal your ranking and people search.</strong>
+              <p>Your venue posts publish automatically when you rate, but your own ranking and top-ranked people search stay private until the invite gate is unlocked.</p>
+            </div>
+          )}
 
           {shareCard && (
             <div className="share-card-preview">

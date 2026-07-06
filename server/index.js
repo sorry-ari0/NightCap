@@ -20,6 +20,7 @@ const sessions = state.sessions;
 const venueCache = state.venueCache;
 const memberDirectory = state.memberDirectory;
 const feedback = state.feedback;
+const posts = state.posts;
 const venueCacheTtlMs = Number(process.env.VENUE_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
 const nycVenueTargetCount = Number(process.env.NYC_VENUE_TARGET_COUNT || 1000);
 const googleSearchConcurrency = Number(process.env.GOOGLE_SEARCH_CONCURRENCY || 6);
@@ -76,7 +77,8 @@ function persist() {
     sessions,
     venueCache,
     memberDirectory,
-    feedback
+    feedback,
+    posts
   });
 }
 
@@ -433,7 +435,7 @@ app.get("/api/google-photo", async (req, res) => {
 });
 
 app.post("/api/ratings", (req, res) => {
-  const { id: sessionId } = getSession(req);
+  const { id: sessionId, data: sessionData } = getSession(req);
   const overallScore = scoreValue(req.body.overallScore);
   const optionalScores = {
     vibesScore: scoreValue(req.body.vibesScore, true),
@@ -470,8 +472,45 @@ app.post("/api/ratings", (req, res) => {
   };
 
   ratings.push(rating);
+  const post = postFromRating(rating, sessionData);
+  posts.push(post);
   persist();
-  res.status(201).json({ rating });
+  res.status(201).json({ rating, post });
+});
+
+app.get("/api/posts", (req, res) => {
+  res.json({
+    posts: posts
+      .filter((post) => post.published)
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(0, 100)
+      .map(publicPost)
+  });
+});
+
+app.post("/api/posts/:postId/likes", (req, res) => {
+  const { id: sessionId } = getSession(req);
+  const post = posts.find((item) => item.id === req.params.postId);
+  if (!post || !post.published) return res.status(404).json({ error: "post not found" });
+  post.likes ??= [];
+  if (!post.likes.includes(sessionId)) post.likes.push(sessionId);
+  persist();
+  res.status(201).json({ post: publicPost(post) });
+});
+
+app.get("/api/people/search", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const successfulInvites = successfulInviteCount(sessionData);
+  if (successfulInvites < 3) {
+    return res.status(403).json({
+      error: `Invite ${3 - successfulInvites} more friend${3 - successfulInvites === 1 ? "" : "s"} to unlock people search.`,
+      inviteGate: inviteGatePayload(successfulInvites)
+    });
+  }
+
+  const query = String(req.query.q || "").trim().toLowerCase();
+  const people = topPeoplePayload(query);
+  res.json({ people, inviteGate: inviteGatePayload(successfulInvites) });
 });
 
 app.post("/api/saved-venues", (req, res) => {
@@ -890,6 +929,98 @@ function profilePayload(sessionId, sessionData) {
   };
 }
 
+function postFromRating(rating, sessionData) {
+  const authorName = sessionData.profile?.name || "NightCap member";
+  return {
+    id: `post-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    sessionId: rating.sessionId,
+    author: {
+      name: authorName,
+      profilePhoto: sessionData.profile?.profilePhoto || ""
+    },
+    ratingId: rating.id,
+    venueId: rating.venueId,
+    venueName: rating.venueName,
+    venueAddress: rating.venueAddress,
+    venueCity: rating.venueCity,
+    overallScore: rating.overallScore,
+    comment: rating.comment,
+    likes: [],
+    published: true,
+    createdAt: rating.createdAt
+  };
+}
+
+function publicPost(post) {
+  return {
+    id: post.id,
+    author: post.author,
+    venueName: post.venueName,
+    venueAddress: post.venueAddress,
+    venueCity: post.venueCity,
+    overallScore: post.overallScore,
+    comment: post.comment,
+    likeCount: post.likes?.length || 0,
+    createdAt: post.createdAt
+  };
+}
+
+function inviteGatePayload(successfulInvites) {
+  return {
+    required: 3,
+    successfulInvites,
+    remaining: Math.max(0, 3 - successfulInvites),
+    unlocked: successfulInvites >= 3
+  };
+}
+
+function topPeoplePayload(query = "") {
+  const peopleBySession = new Map();
+  for (const post of posts.filter((item) => item.published)) {
+    const person = peopleBySession.get(post.sessionId) || {
+      id: post.sessionId,
+      name: post.author?.name || "NightCap member",
+      profilePhoto: post.author?.profilePhoto || "",
+      postCount: 0,
+      likeCount: 0,
+      averageScore: 0,
+      scoreTotal: 0,
+      topPost: null
+    };
+    person.postCount += 1;
+    person.likeCount += post.likes?.length || 0;
+    person.scoreTotal += post.overallScore || 0;
+    if (!person.topPost || (post.likes?.length || 0) > person.topPost.likeCount || post.overallScore > person.topPost.overallScore) {
+      person.topPost = {
+        venueName: post.venueName,
+        overallScore: post.overallScore,
+        likeCount: post.likes?.length || 0,
+        comment: post.comment
+      };
+    }
+    peopleBySession.set(post.sessionId, person);
+  }
+
+  return Array.from(peopleBySession.values())
+    .map((person) => ({
+      ...person,
+      averageScore: person.postCount ? Math.round((person.scoreTotal / person.postCount) * 10) / 10 : 0,
+      rankScore: Math.round((person.likeCount * 3 + person.postCount * 2 + (person.scoreTotal / Math.max(1, person.postCount))) * 10) / 10,
+      scoreTotal: undefined
+    }))
+    .filter((person) => {
+      if (!query) return true;
+      const haystack = [
+        person.name,
+        person.topPost?.venueName,
+        person.topPost?.comment
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    })
+    .sort((a, b) => b.rankScore - a.rankScore || b.likeCount - a.likeCount || b.postCount - a.postCount)
+    .slice(0, 20);
+}
+
 function publicProfile(profile) {
   if (!profile) return null;
   return {
@@ -1037,6 +1168,7 @@ function parseImportedContacts(contacts, raw) {
 
 function rankingPayload(sessionId, sessionData) {
   const successfulInvites = successfulInviteCount(sessionData);
+  const inviteGate = inviteGatePayload(successfulInvites);
   const topVenues = ratings
     .filter((rating) => rating.sessionId === sessionId)
     .reduce((acc, rating) => {
@@ -1069,16 +1201,12 @@ function rankingPayload(sessionId, sessionData) {
     slug,
     handle: "demo",
     shareUrl: published && slug ? `/u/demo/rankings/${slug}` : null,
-    shareText: ranking.length
+    shareText: inviteGate.unlocked && ranking.length
       ? `My NightCap nightlife ranking: ${ranking.slice(0, 3).map((venue, index) => `${index + 1}. ${venue.name}`).join(" / ")}`
       : "I’m building my NightCap nightlife ranking.",
-    inviteGate: {
-      required: 3,
-      successfulInvites,
-      remaining: Math.max(0, 3 - successfulInvites),
-      unlocked: successfulInvites >= 3
-    },
-    ranking
+    inviteGate,
+    rankingLocked: !inviteGate.unlocked,
+    ranking: inviteGate.unlocked ? ranking : []
   };
 }
 
@@ -1152,6 +1280,7 @@ if (process.env.NODE_ENV === "test") {
     for (const key of Object.keys(sessions)) delete sessions[key];
     for (const key of Object.keys(venueCache)) delete venueCache[key];
     feedback.splice(0, feedback.length);
+    posts.splice(0, posts.length);
     persist();
     res.json({ ok: true });
   });
