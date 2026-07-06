@@ -22,6 +22,11 @@ try {
   const venues = await request("/api/venues?city=New%20York&vibe=cocktail");
   assert.equal(Array.isArray(venues.venues), true);
   assert.ok(venues.venues.length > 0);
+  assert.equal(Array.isArray(venues.map.points), true);
+  assert.ok(venues.map.points.length > 0);
+
+  const cities = await request("/api/cities");
+  assert.deepEqual(cities.launchOrder, ["New York", "San Francisco", "Los Angeles"]);
 
   await assert.rejects(
     () => request("/api/ratings", {

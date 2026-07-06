@@ -9,6 +9,8 @@ test("loads venues and shows deployment status", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Your night, ranked before it starts." })).toBeVisible();
   await expect(page.getByText(/venues loaded/)).toBeVisible();
   await expect(page.getByText(/Storage:/)).toBeVisible();
+  await expect(page.locator(".venue-map")).toBeVisible();
+  await expect(page.locator(".venue-card").first()).toBeVisible();
   expect(await page.locator(".venue-card").count()).toBeGreaterThan(0);
 });
 
@@ -30,6 +32,7 @@ test("rates a venue and refreshes category scores", async ({ page }) => {
 
 test("builds and copies a night plan", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await expect(page.locator(".venue-card").first()).toBeVisible();
   await page.getByRole("button", { name: "Build tonight" }).click();
   await expect(page.locator(".plan-stop")).toHaveCount(3);
   await page.getByRole("button", { name: "Copy plan" }).click();

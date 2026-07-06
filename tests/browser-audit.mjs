@@ -63,7 +63,8 @@ async function auditViewport(viewport, name) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   console.log(`browser-audit: ${name} waiting for venues`);
   try {
-    await page.waitForSelector(".venue-card", { timeout: 20_000 });
+  await page.waitForSelector(".venue-card", { timeout: 20_000 });
+  await page.waitForSelector(".venue-map", { timeout: 20_000 });
   } catch (error) {
     console.error(`browser-audit: ${name} body text\n${await page.locator("body").innerText().catch(() => "<unavailable>")}`);
     console.error(`browser-audit: ${name} console errors\n${consoleErrors.join("\n") || "<none>"}`);

@@ -547,6 +547,99 @@ button:disabled {
   font-weight: 850;
 }
 
+.venue-map {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 12px;
+  min-height: 260px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #302f25;
+  border-radius: 8px;
+  background: #11110f;
+}
+
+.map-canvas {
+  position: relative;
+  min-height: 236px;
+  overflow: hidden;
+  border: 1px solid #25241d;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(216, 255, 104, 0.08), transparent 35%),
+    linear-gradient(160deg, #15150f 0%, #202014 48%, #10100e 100%);
+}
+
+.map-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.45;
+  background-image:
+    linear-gradient(rgba(246, 240, 230, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(246, 240, 230, 0.07) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+.map-pin {
+  position: absolute;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+  border: 2px solid #10100e;
+  border-radius: 999px;
+  background: #fff9ed;
+  color: #10100e;
+  font-size: 12px;
+  font-weight: 950;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.35);
+}
+
+.map-pin.active {
+  width: 42px;
+  height: 42px;
+  background: #d8ff68;
+}
+
+.map-side {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #191915;
+}
+
+.map-side h3 {
+  margin-bottom: 8px;
+  color: #fff9ed;
+  font-size: 22px;
+  line-height: 1.08;
+}
+
+.map-side p:not(.eyebrow) {
+  margin-bottom: auto;
+  color: rgba(246, 240, 230, 0.62);
+  font-size: 13px;
+  line-height: 1.42;
+}
+
+.map-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.map-meta span {
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #11110f;
+  color: rgba(246, 240, 230, 0.66);
+  font-size: 12px;
+  font-weight: 850;
+}
+
 .range {
   margin-bottom: 16px;
 }
@@ -916,6 +1009,14 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .venue-map {
+    grid-template-columns: 1fr;
+  }
+
+  .map-side {
+    min-height: 160px;
+  }
+
   .status-bar span {
     border-left: 0;
     border-top: 1px solid rgba(246, 240, 230, 0.12);
@@ -953,6 +1054,16 @@ button:disabled {
 
   .venue-grid {
     grid-template-columns: 1fr;
+  }
+
+  .map-canvas {
+    min-height: 220px;
+  }
+
+  .source {
+    width: 100%;
+    margin-left: 0;
+    text-align: center;
   }
 
   .public-hero {

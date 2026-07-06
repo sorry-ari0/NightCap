@@ -5,6 +5,8 @@ NightCap is a Beli-inspired nightlife planner MVP for bars, clubs, lounges, and 
 ## What It Does
 
 - Pulls bars and clubs from Google Places when `GOOGLE_MAPS_API_KEY` is configured.
+- Caches Google Places venue data locally by city and vibe so repeat searches use stored Maps data instead of spending quota.
+- Renders an in-app stored-location map from cached latitude/longitude points.
 - Falls back to seeded venues so the MVP works immediately.
 - Lets users rate an overall venue score.
 - Supports optional category ratings for vibes, drinks, people, aesthetics, music, and value.
@@ -34,6 +36,14 @@ GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 
 The server uses Google Places API Text Search and Place Photos. With a valid key, venue cards use Google Places photo names through `/api/google-photo`, so the live site shows real location imagery instead of seed placeholders.
 
+Venue search responses are stored in `data/nightcap-db.json` under `venueCache`. Cache keys combine city and vibe, default expiry is 30 days, and repeat requests return `source: "google-cache"` without calling Google again. Override the TTL with:
+
+```sh
+VENUE_CACHE_TTL_MS=2592000000
+```
+
+The current launch city order is New York, San Francisco, then Los Angeles. `/api/cities` returns that order plus any cached cities.
+
 For a real public deployment, also set:
 
 ```sh
@@ -44,7 +54,7 @@ That makes `/api/venues` return a configuration error instead of silently using 
 
 ## Local Data
 
-The MVP stores ratings, saved venues, and invite progress in `data/nightcap-db.json`. That file is ignored by git so local testing does not leak user-generated data.
+The MVP stores ratings, saved venues, invite progress, and cached venue/map data in `data/nightcap-db.json`. That file is ignored by git so local testing does not leak user-generated data or cached API payloads.
 
 ## Deploy For Free
 

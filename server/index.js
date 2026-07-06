@@ -16,6 +16,9 @@ app.use(express.json({ limit: "1mb" }));
 const state = loadState();
 const ratings = state.ratings;
 const sessions = state.sessions;
+const venueCache = state.venueCache;
+const venueCacheTtlMs = Number(process.env.VENUE_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
+const supportedCities = ["New York", "San Francisco", "Los Angeles"];
 
 function getSession(req) {
   const rawSessionId = String(req.get("x-nightcap-session") || "demo").trim();
@@ -40,7 +43,8 @@ function persist() {
     ratings,
     savedVenueIds: [],
     invites: [],
-    sessions
+    sessions,
+    venueCache
   });
 }
 
@@ -137,8 +141,7 @@ async function googleTextSearch(query, city) {
     },
     body: JSON.stringify({
       textQuery: query,
-      includedType: "bar",
-      maxResultCount: 12
+      maxResultCount: 16
     })
   });
 
@@ -155,6 +158,10 @@ app.get("/api/venues", async (req, res) => {
   const { data: sessionData } = getSession(req);
   const city = String(req.query.city || "New York").trim();
   const vibe = String(req.query.vibe || "").trim();
+  const refresh = req.query.refresh === "true";
+  const key = venueCacheKey(city, vibe);
+  const cached = venueCache[key];
+  const now = Date.now();
 
   if (requireGoogleMaps && !googleKey) {
     return res.status(503).json({
@@ -163,13 +170,52 @@ app.get("/api/venues", async (req, res) => {
     });
   }
 
+  if (!refresh && cached?.venues?.length && Date.parse(cached.expiresAt) > now) {
+    const venues = cached.venues.map((venue) => withScores(venue, sessionData));
+    return res.json({
+      source: "google-cache",
+      cacheStatus: "hit",
+      fallbackReason: null,
+      fetchedAt: cached.fetchedAt,
+      expiresAt: cached.expiresAt,
+      venues,
+      map: mapPayload(venues)
+    });
+  }
+
   if (googleKey) {
     try {
       const query = [vibe, "bars clubs nightlife", city].filter(Boolean).join(" ");
       const venues = await googleTextSearch(query, city);
-      return res.json({ source: "google", fallbackReason: null, venues: venues.map((venue) => withScores(venue, sessionData)) });
+      const fetchedAt = new Date().toISOString();
+      const expiresAt = new Date(now + venueCacheTtlMs).toISOString();
+      venueCache[key] = {
+        city,
+        vibe,
+        source: "google",
+        fetchedAt,
+        expiresAt,
+        venues
+      };
+      persist();
+      const scoredVenues = venues.map((venue) => withScores(venue, sessionData));
+      return res.json({
+        source: "google",
+        cacheStatus: cached ? "refresh" : "miss",
+        fallbackReason: null,
+        fetchedAt,
+        expiresAt,
+        venues: scoredVenues,
+        map: mapPayload(scoredVenues)
+      });
     } catch (error) {
       console.error(error);
+      if (requireGoogleMaps) {
+        return res.status(502).json({
+          error: "Google Places failed while production Maps mode is required.",
+          code: "maps_request_failed"
+        });
+      }
     }
   }
 
@@ -177,11 +223,25 @@ app.get("/api/venues", async (req, res) => {
   const venues = fallbackVenues.filter((venue) => {
     return venue.city.toLowerCase().includes(normalizedCity) || normalizedCity.includes(venue.city.toLowerCase());
   });
+  const seedVenues = (venues.length ? venues : fallbackVenues).map((venue) => withScores(venue, sessionData));
 
   res.json({
     source: "seed",
+    cacheStatus: "seed",
     fallbackReason: googleKey ? "Google Places failed, using seed venues." : "GOOGLE_MAPS_API_KEY is not configured.",
-    venues: (venues.length ? venues : fallbackVenues).map((venue) => withScores(venue, sessionData))
+    venues: seedVenues,
+    map: mapPayload(seedVenues)
+  });
+});
+
+app.get("/api/cities", (req, res) => {
+  const cachedCities = Object.values(venueCache)
+    .map((entry) => entry.city)
+    .filter(Boolean);
+  res.json({
+    cities: Array.from(new Set([...supportedCities, ...cachedCities])),
+    launchOrder: supportedCities,
+    cacheTtlDays: Math.round(venueCacheTtlMs / (1000 * 60 * 60 * 24))
   });
 });
 
@@ -190,7 +250,8 @@ app.get("/api/health", (req, res) => {
     ok: true,
     mapsConfigured: Boolean(googleKey),
     mapsRequired: requireGoogleMaps,
-    storage: "local-json"
+    storage: "local-json",
+    venueCacheEntries: Object.keys(venueCache).length
   });
 });
 
@@ -419,6 +480,46 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function venueCacheKey(city, vibe) {
+  return [city || "New York", vibe || "all"]
+    .map((part) => String(part).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""))
+    .join("::");
+}
+
+function mapPayload(venues) {
+  const points = venues
+    .map((venue) => ({
+      id: venue.id,
+      name: venue.name,
+      city: venue.city,
+      lat: optionalNumber(venue.location?.lat),
+      lng: optionalNumber(venue.location?.lng),
+      score: venue.overallScore ?? venue.googleRating ?? null,
+      source: venue.source,
+      photoUrl: venue.photoUrl || null
+    }))
+    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+
+  if (!points.length) {
+    return { points: [], bounds: null };
+  }
+
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lng);
+  const latPad = Math.max(0.002, (Math.max(...lats) - Math.min(...lats)) * 0.18);
+  const lngPad = Math.max(0.002, (Math.max(...lngs) - Math.min(...lngs)) * 0.18);
+
+  return {
+    points,
+    bounds: {
+      north: Math.max(...lats) + latPad,
+      south: Math.min(...lats) - latPad,
+      east: Math.max(...lngs) + lngPad,
+      west: Math.min(...lngs) - lngPad
+    }
+  };
+}
+
 function scoreValue(value, optional = false) {
   if ((value === undefined || value === null || value === "") && optional) return null;
   const number = Number(value);
@@ -571,6 +672,7 @@ if (process.env.NODE_ENV === "test") {
   app.post("/api/test/reset", (req, res) => {
     ratings.splice(0, ratings.length);
     for (const key of Object.keys(sessions)) delete sessions[key];
+    for (const key of Object.keys(venueCache)) delete venueCache[key];
     persist();
     res.json({ ok: true });
   });

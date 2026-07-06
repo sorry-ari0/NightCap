@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertCircle, Bookmark, CalendarClock, Copy, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
+import { AlertCircle, Bookmark, CalendarClock, Copy, Database, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
 import "./styles.css";
 
 const categories = [
@@ -12,14 +12,15 @@ const categories = [
   { key: "value", label: "Value" }
 ];
 
-const cityOptions = ["New York", "Miami", "Los Angeles"];
+const cityOptions = ["New York", "San Francisco", "Los Angeles"];
 const clientSeedVenues = [
-  { id: "client-nightmoves", canonicalVenueKey: "nightmoves-new-york", name: "Nightmoves", address: "Williamsburg, Brooklyn, NY", city: "New York", types: ["bar", "night_club"], categoryScores: {}, recentComments: [] },
-  { id: "client-le-bain", canonicalVenueKey: "le-bain-new-york", name: "Le Bain", address: "Meatpacking District, New York, NY", city: "New York", types: ["bar", "night_club"], categoryScores: {}, recentComments: [] },
-  { id: "client-public-records", canonicalVenueKey: "public-records-new-york", name: "Public Records", address: "Gowanus, Brooklyn, NY", city: "New York", types: ["bar", "night_club"], categoryScores: {}, recentComments: [] },
-  { id: "client-sweet-liberty", canonicalVenueKey: "sweet-liberty-miami", name: "Sweet Liberty", address: "Miami Beach, FL", city: "Miami", types: ["bar"], categoryScores: {}, recentComments: [] },
-  { id: "client-club-space", canonicalVenueKey: "club-space-miami", name: "Club Space", address: "Downtown Miami, FL", city: "Miami", types: ["night_club"], categoryScores: {}, recentComments: [] },
-  { id: "client-death-co", canonicalVenueKey: "death-and-co-los-angeles", name: "Death & Co", address: "Arts District, Los Angeles, CA", city: "Los Angeles", types: ["bar"], categoryScores: {}, recentComments: [] }
+  { id: "client-nightmoves", canonicalVenueKey: "nightmoves-new-york", name: "Nightmoves", address: "Williamsburg, Brooklyn, NY", city: "New York", types: ["bar", "night_club"], location: { lat: 40.7147, lng: -73.9614 }, categoryScores: {}, recentComments: [] },
+  { id: "client-le-bain", canonicalVenueKey: "le-bain-new-york", name: "Le Bain", address: "Meatpacking District, New York, NY", city: "New York", types: ["bar", "night_club"], location: { lat: 40.7409, lng: -74.0088 }, categoryScores: {}, recentComments: [] },
+  { id: "client-public-records", canonicalVenueKey: "public-records-new-york", name: "Public Records", address: "Gowanus, Brooklyn, NY", city: "New York", types: ["bar", "night_club"], location: { lat: 40.6781, lng: -73.9863 }, categoryScores: {}, recentComments: [] },
+  { id: "client-smugglers-cove", canonicalVenueKey: "smugglers-cove-san-francisco", name: "Smuggler's Cove", address: "Hayes Valley, San Francisco, CA", city: "San Francisco", types: ["bar"], location: { lat: 37.7794, lng: -122.4232 }, categoryScores: {}, recentComments: [] },
+  { id: "client-monarch", canonicalVenueKey: "monarch-san-francisco", name: "Monarch", address: "SoMa, San Francisco, CA", city: "San Francisco", types: ["bar", "night_club"], location: { lat: 37.7809, lng: -122.4085 }, categoryScores: {}, recentComments: [] },
+  { id: "client-temple-nightclub", canonicalVenueKey: "temple-nightclub-san-francisco", name: "Temple Nightclub", address: "SoMa, San Francisco, CA", city: "San Francisco", types: ["night_club"], location: { lat: 37.7878, lng: -122.3972 }, categoryScores: {}, recentComments: [] },
+  { id: "client-death-co", canonicalVenueKey: "death-and-co-los-angeles", name: "Death & Co", address: "Arts District, Los Angeles, CA", city: "Los Angeles", types: ["bar"], location: { lat: 34.0441, lng: -118.2327 }, categoryScores: {}, recentComments: [] }
 ];
 
 function getAppBasePath() {
@@ -41,7 +42,8 @@ function getNightcapSession() {
 }
 
 function App() {
-  const publicRankingMatch = window.location.pathname.match(/^\/u\/([^/]+)\/rankings\/([^/]+)/);
+  const publicPath = window.location.pathname.replace(getAppBasePath(), "") || "/";
+  const publicRankingMatch = publicPath.match(/^\/u\/([^/]+)\/rankings\/([^/]+)/);
   if (publicRankingMatch) {
     return <PublicRankingPage handle={publicRankingMatch[1]} slug={publicRankingMatch[2]} />;
   }
@@ -63,6 +65,8 @@ function App() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [fallbackReason, setFallbackReason] = useState("");
+  const [mapData, setMapData] = useState({ points: [], bounds: null });
+  const [cacheStatus, setCacheStatus] = useState("");
   const [sessionId] = useState(getNightcapSession);
 
   async function apiFetch(path, options = {}) {
@@ -92,11 +96,16 @@ function App() {
       setVenues(data.venues);
       setSource(data.source);
       setFallbackReason(data.fallbackReason || "");
+      setMapData(data.map || buildMapData(data.venues));
+      setCacheStatus(data.cacheStatus || "");
     } catch (loadError) {
       const normalizedCity = city.toLowerCase();
       const fallbackVenues = clientSeedVenues.filter((venue) => venue.city.toLowerCase().includes(normalizedCity) || normalizedCity.includes(venue.city.toLowerCase()));
-      setVenues(fallbackVenues.length ? fallbackVenues : clientSeedVenues);
+      const localVenues = fallbackVenues.length ? fallbackVenues : clientSeedVenues;
+      setVenues(localVenues);
       setSource("seed");
+      setMapData(buildMapData(localVenues));
+      setCacheStatus("local");
       setFallbackReason("Local demo fallback is active while the API is unavailable.");
       setError(loadError.name === "AbortError" ? "API timed out, showing demo venues." : loadError.message);
     } finally {
@@ -387,7 +396,7 @@ function App() {
       <section className="status-bar">
         <span>{health?.mapsConfigured ? "Maps connected" : "Maps key not set, using seed venues"}</span>
         <span>Storage: {health?.storage ?? "checking"}</span>
-        <span>{source === "google" ? "Live Google Places results" : (fallbackReason || "Demo data active")}</span>
+        <span>{cacheStatus === "hit" ? "Cached Places data" : source === "google" ? "Live Google Places results" : (fallbackReason || "Demo data active")}</span>
       </section>
 
       <section className="onboarding">
@@ -535,8 +544,10 @@ function App() {
           <div className="section-heading">
             <CalendarClock size={18} />
             <h2>{city} shortlist</h2>
-            <span className="source">{source === "google" ? "Google Places" : "Seed fallback"}</span>
+            <span className="source">{sourceLabel(source, cacheStatus)}</span>
           </div>
+
+          <VenueMap mapData={mapData} venues={venues} />
 
           <div className="venue-grid">
             {venues.map((venue) => (
@@ -554,6 +565,91 @@ function App() {
         />
       )}
     </main>
+  );
+}
+
+function sourceLabel(source, cacheStatus) {
+  if (cacheStatus === "hit") return "Stored Maps data";
+  if (source === "google-cache") return "Stored Maps data";
+  if (source === "google") return "Google Places";
+  return "Seed fallback";
+}
+
+function buildMapData(venues) {
+  const points = venues
+    .map((venue) => ({
+      id: venue.id,
+      name: venue.name,
+      city: venue.city,
+      lat: Number(venue.location?.lat),
+      lng: Number(venue.location?.lng),
+      score: venue.overallScore ?? venue.googleRating ?? null,
+      source: venue.source || "client",
+      photoUrl: venue.photoUrl || null
+    }))
+    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+
+  if (!points.length) return { points: [], bounds: null };
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lng);
+  const latPad = Math.max(0.002, (Math.max(...lats) - Math.min(...lats)) * 0.18);
+  const lngPad = Math.max(0.002, (Math.max(...lngs) - Math.min(...lngs)) * 0.18);
+  return {
+    points,
+    bounds: {
+      north: Math.max(...lats) + latPad,
+      south: Math.min(...lats) - latPad,
+      east: Math.max(...lngs) + lngPad,
+      west: Math.min(...lngs) - lngPad
+    }
+  };
+}
+
+function VenueMap({ mapData, venues }) {
+  const [activeId, setActiveId] = useState(null);
+  const points = mapData?.points ?? [];
+  const bounds = mapData?.bounds;
+  const activePoint = points.find((point) => point.id === activeId) || points[0];
+  const venueById = new Map(venues.map((venue) => [venue.id, venue]));
+
+  function pointStyle(point) {
+    if (!bounds) return {};
+    const lngRange = bounds.east - bounds.west || 1;
+    const latRange = bounds.north - bounds.south || 1;
+    const left = ((point.lng - bounds.west) / lngRange) * 100;
+    const top = ((bounds.north - point.lat) / latRange) * 100;
+    return {
+      left: `${Math.min(94, Math.max(6, left))}%`,
+      top: `${Math.min(90, Math.max(10, top))}%`
+    };
+  }
+
+  return (
+    <div className="venue-map" aria-label="Stored venue map">
+      <div className="map-canvas">
+        <div className="map-grid" />
+        {points.map((point, index) => (
+          <button
+            className={point.id === activePoint?.id ? "map-pin active" : "map-pin"}
+            key={point.id}
+            style={pointStyle(point)}
+            onClick={() => setActiveId(point.id)}
+            title={point.name}
+          >
+            {index + 1}
+          </button>
+        ))}
+      </div>
+      <div className="map-side">
+        <p className="eyebrow"><Database size={14} /> Cached map</p>
+        <h3>{activePoint?.name || "No mapped venues yet"}</h3>
+        <p>{activePoint ? venueById.get(activePoint.id)?.address || activePoint.city : "Search a launch city to populate stored coordinates."}</p>
+        <div className="map-meta">
+          <span>{points.length} points</span>
+          <span>{activePoint?.source || "stored"}</span>
+        </div>
+      </div>
+    </div>
   );
 }
 
