@@ -298,7 +298,7 @@ function nycVenueQueries(vibe, targetCount) {
   }
 
   const minimumQueries = Math.ceil((targetCount || nycVenueTargetCount) / 12);
-  return Array.from(new Set(queries)).slice(0, Math.max(minimumQueries, 240));
+  return Array.from(new Set(queries)).slice(0, Math.max(minimumQueries, 360));
 }
 
 app.get("/api/venues", async (req, res) => {
