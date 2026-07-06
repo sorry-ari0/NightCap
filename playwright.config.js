@@ -1,7 +1,17 @@
+import fs from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 const e2ePort = process.env.E2E_PORT || "3001";
-const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined;
+const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.PLAYWRIGHT_EXECUTABLE_PATH || "";
+
+if (chromiumExecutablePath && !fs.existsSync(chromiumExecutablePath)) {
+  throw new Error(`Explicit Chromium executable path does not exist: ${chromiumExecutablePath}`);
+}
+
+if (chromiumExecutablePath) {
+  process.env.PLAYWRIGHT_EXECUTABLE_PATH = chromiumExecutablePath;
+}
+
 const browserLaunchOptions = {
   ...(chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {}),
   args: [
@@ -22,6 +32,7 @@ export default defineConfig({
   },
   use: {
     baseURL: `http://127.0.0.1:${e2ePort}`,
+    browserName: "chromium",
     trace: "retain-on-failure",
     launchOptions: browserLaunchOptions
   },
@@ -36,6 +47,7 @@ export default defineConfig({
       name: "desktop",
       use: {
         ...devices["Desktop Chrome"],
+        browserName: "chromium",
         launchOptions: browserLaunchOptions
       }
     },
@@ -43,6 +55,7 @@ export default defineConfig({
       name: "mobile",
       use: {
         ...devices["Pixel 5"],
+        browserName: "chromium",
         launchOptions: browserLaunchOptions
       }
     }

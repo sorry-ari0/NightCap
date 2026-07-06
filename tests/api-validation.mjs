@@ -27,6 +27,11 @@ try {
   assert.equal(Array.isArray(venues.map.points), true);
   assert.ok(venues.map.points.length > 0);
 
+  const venueNameSearch = await request(`/api/venues?city=New%20York&vibe=${encodeURIComponent(venues.venues[0].name)}`);
+  assert.equal(venueNameSearch.venues[0].name, venues.venues[0].name);
+  const locationSearch = await request("/api/venues?city=New%20York&vibe=Brooklyn");
+  assert.equal(locationSearch.venues.some((venue) => `${venue.address} ${venue.neighborhood} ${venue.city}`.toLowerCase().includes("brooklyn")), true);
+
   const cities = await request("/api/cities");
   assert.deepEqual(cities.launchOrder, ["New York", "San Francisco", "Los Angeles"]);
 
@@ -48,9 +53,19 @@ try {
 
   const resetRequest = await request("/api/password/reset-request", {
     method: "POST",
-    body: { contact: "api-tester@example.com" }
+    body: { email: "api-tester@example.com" }
   });
   assert.ok(resetRequest.resetToken);
+  assert.equal(resetRequest.sentTo, "api-tester@example.com");
+  assert.ok(resetRequest.deliveryId.startsWith("email-"));
+
+  await assert.rejects(
+    () => request("/api/password/reset-request", {
+      method: "POST",
+      body: { email: "+15550101010" }
+    }),
+    /valid account email/
+  );
 
   const reset = await request("/api/password/reset", {
     method: "POST",

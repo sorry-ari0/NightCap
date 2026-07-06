@@ -21,6 +21,7 @@ const venueCache = state.venueCache;
 const memberDirectory = state.memberDirectory;
 const feedback = state.feedback;
 const posts = state.posts;
+const sentEmails = state.sentEmails;
 const venueCacheTtlMs = Number(process.env.VENUE_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
 const nycVenueTargetCount = Number(process.env.NYC_VENUE_TARGET_COUNT || 1000);
 const googleSearchConcurrency = Number(process.env.GOOGLE_SEARCH_CONCURRENCY || 6);
@@ -78,7 +79,8 @@ function persist() {
     venueCache,
     memberDirectory,
     feedback,
-    posts
+    posts,
+    sentEmails
   });
 }
 
@@ -330,7 +332,7 @@ app.get("/api/venues", async (req, res) => {
   }
 
   if (!refresh && cached?.venues?.length && Date.parse(cached.expiresAt) > now) {
-    const venues = cached.venues.map((venue) => withScores(venue, sessionData));
+    const venues = rankVenuesForQuery(cached.venues, vibe, city).map((venue) => withScores(venue, sessionData));
     return res.json({
       source: "google-cache",
       cacheStatus: "hit",
@@ -384,7 +386,7 @@ app.get("/api/venues", async (req, res) => {
   const venues = fallbackVenues.filter((venue) => {
     return venue.city.toLowerCase().includes(normalizedCity) || normalizedCity.includes(venue.city.toLowerCase());
   });
-  const seedVenues = (venues.length ? venues : fallbackVenues).map((venue) => withScores(venue, sessionData));
+  const seedVenues = rankVenuesForQuery(venues.length ? venues : fallbackVenues, vibe, city).map((venue) => withScores(venue, sessionData));
 
   res.json({
     source: "seed",
@@ -587,25 +589,29 @@ app.post("/api/profile/photo", (req, res) => {
 });
 
 app.post("/api/password/reset-request", (req, res) => {
-  const { data: sessionData } = getSession(req);
-  const contact = String(req.body.contact || "").trim().slice(0, 120);
-  if (!contact || !isValidInviteContact(contact)) return res.status(400).json({ error: "valid email or phone is required" });
+  getSession(req);
+  const email = String(req.body.email || req.body.contact || "").trim().slice(0, 120);
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "valid account email is required" });
 
-  const normalized = normalizeContact(contact);
-  const match = findSessionByContact(normalized);
-  const targetSessionData = match?.data || sessionData;
+  const normalized = normalizeContact(email);
+  const match = findSessionByEmail(normalized);
+  const targetSessionData = match?.data;
   if (!targetSessionData.profile) return res.status(404).json({ error: "no account found for that contact" });
 
   const resetToken = crypto.randomBytes(18).toString("hex");
   targetSessionData.passwordReset = {
     token: resetToken,
-    contact: normalized,
+    email: normalized,
     expiresAt: new Date(Date.now() + passwordResetTtlMs).toISOString(),
     createdAt: new Date().toISOString()
   };
+  const emailDelivery = passwordResetEmail(targetSessionData.profile.email, resetToken, targetSessionData.passwordReset.expiresAt);
+  sentEmails.push(emailDelivery);
   persist();
   res.status(201).json({
     ok: true,
+    deliveryId: emailDelivery.id,
+    sentTo: targetSessionData.profile.email,
     expiresAt: targetSessionData.passwordReset.expiresAt,
     resetToken: process.env.NODE_ENV === "production" ? undefined : resetToken
   });
@@ -840,6 +846,45 @@ function venueCacheKey(city, vibe, location) {
     .join("::");
 }
 
+function rankVenuesForQuery(venues, query, city) {
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedCity = normalizeSearchText(city);
+  if (!normalizedQuery) return venues;
+
+  return [...venues]
+    .map((venue, index) => {
+      const name = normalizeSearchText(venue.name);
+      const address = normalizeSearchText(venue.address);
+      const neighborhood = normalizeSearchText(venue.neighborhood);
+      const venueCity = normalizeSearchText(venue.city);
+      const types = normalizeSearchText((venue.types || []).join(" "));
+      let score = 0;
+
+      if (name === normalizedQuery) score += 120;
+      if (name.includes(normalizedQuery)) score += 80;
+      if (normalizedQuery.includes(name) && name.length > 3) score += 60;
+      if (neighborhood.includes(normalizedQuery) || normalizedQuery.includes(neighborhood)) score += 48;
+      if (address.includes(normalizedQuery)) score += 38;
+      if (venueCity.includes(normalizedQuery) || normalizedQuery.includes(venueCity)) score += 28;
+      if (types.includes(normalizedQuery)) score += 12;
+      if (normalizedCity && venueCity.includes(normalizedCity)) score += 8;
+
+      return { venue, index, score };
+    })
+    .sort((a, b) => b.score - a.score || (b.venue.overallScore ?? b.venue.googleRating ?? 0) - (a.venue.overallScore ?? a.venue.googleRating ?? 0) || a.index - b.index)
+    .map((item) => item.venue);
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function mapPayload(venues) {
   const points = venues
     .map((venue) => ({
@@ -1053,6 +1098,26 @@ function findSessionByContact(normalizedContact) {
   return Object.entries(sessions).map(([id, data]) => ({ id, data })).find(({ data }) => {
     return data.profile?.normalizedEmail === normalizedContact || data.profile?.normalizedPhone === normalizedContact;
   });
+}
+
+function findSessionByEmail(normalizedEmail) {
+  return Object.entries(sessions).map(([id, data]) => ({ id, data })).find(({ data }) => {
+    return data.profile?.normalizedEmail === normalizedEmail;
+  });
+}
+
+function passwordResetEmail(email, resetToken, expiresAt) {
+  return {
+    id: `email-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    to: email,
+    subject: "Reset your NightCap password",
+    template: "password-reset",
+    resetToken,
+    body: `Use this code to reset your NightCap password: ${resetToken}`,
+    expiresAt,
+    sentAt: new Date().toISOString(),
+    provider: process.env.EMAIL_PROVIDER || "local-json"
+  };
 }
 
 function contactGraphPayload(sessionId, sessionData) {

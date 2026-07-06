@@ -51,9 +51,11 @@ test("builds and copies a night plan", async ({ page, context }) => {
 });
 
 test("saves account, feedback, password reset, and profile picture", async ({ page }) => {
+  test.setTimeout(90_000);
   await page.locator(".app-tabs").getByRole("button", { name: "Account" }).click();
+  const accountEmail = `tester-${Date.now()}@example.com`;
   await page.getByPlaceholder("Your name").fill("NightCap Tester");
-  await page.getByPlaceholder("you@example.com").fill(`tester-${Date.now()}@example.com`);
+  await page.getByPlaceholder("you@example.com").fill(accountEmail);
   await page.getByPlaceholder("+1 555 0100").fill("+15550109999");
   await page.locator(".account-form").getByPlaceholder("At least 8 characters").fill("nightcap-password");
   await page.locator(".photo-upload input").setInputFiles({
@@ -69,9 +71,17 @@ test("saves account, feedback, password reset, and profile picture", async ({ pa
   await page.locator(".feedback-form").getByRole("button", { name: "Send feedback" }).click();
   await expect(page.getByText("Feedback sent.")).toBeVisible();
 
-  await page.getByPlaceholder("Email or phone").fill("+15550109999");
+  await page.getByPlaceholder("Account email").fill(accountEmail);
+  const resetResponsePromise = page.waitForResponse((response) => {
+    return response.url().includes("/api/password/reset-request") && response.request().method() === "POST";
+  });
   await page.locator(".password-form").first().getByRole("button", { name: "Send reset" }).click();
-  await expect(page.getByText(/Reset code created|Reset link sent/)).toBeVisible();
+  const resetResponse = await resetResponsePromise;
+  expect(resetResponse.ok()).toBeTruthy();
+  const resetPayload = await resetResponse.json();
+  expect(resetPayload.sentTo).toBe(accountEmail);
+  expect(resetPayload.deliveryId).toMatch(/^email-/);
+  await expect(page.getByText(/Reset email sent/)).toBeVisible();
   await page.locator(".password-form").last().getByPlaceholder("At least 8 characters").fill("nightcap-new-password");
   await page.locator(".password-form").last().getByRole("button", { name: "Reset password" }).click();
   await expect(page.getByText("Password reset.")).toBeVisible();

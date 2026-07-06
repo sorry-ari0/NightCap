@@ -401,10 +401,10 @@ function App() {
     try {
       const data = await apiFetch("/api/password/reset-request", {
         method: "POST",
-        body: JSON.stringify({ contact: resetForm.contact })
+        body: JSON.stringify({ email: resetForm.contact })
       });
       setResetForm((form) => ({ ...form, token: data.resetToken || "" }));
-      setResetNotice(data.resetToken ? "Reset code created. It is filled in for this local build." : "Reset link sent.");
+      setResetNotice(data.resetToken ? `Reset email sent to ${data.sentTo}. The local code is filled in for this build.` : `Reset email sent to ${data.sentTo}.`);
       setNotice("");
       setError("");
     } catch (resetError) {
@@ -944,7 +944,7 @@ function App() {
             <form className="password-form" onSubmit={requestPasswordReset}>
               <label>
                 <span>Reset password</span>
-                <input value={resetForm.contact} onChange={(event) => setResetForm((form) => ({ ...form, contact: event.target.value }))} placeholder="Email or phone" />
+                <input type="email" value={resetForm.contact} onChange={(event) => setResetForm((form) => ({ ...form, contact: event.target.value }))} placeholder="Account email" />
               </label>
               <button className="secondary full" type="submit">Send reset</button>
             </form>
