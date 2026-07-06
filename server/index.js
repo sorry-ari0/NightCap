@@ -19,6 +19,8 @@ const sessions = state.sessions;
 const venueCache = state.venueCache;
 const memberDirectory = state.memberDirectory;
 const venueCacheTtlMs = Number(process.env.VENUE_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
+const nycVenueTargetCount = Number(process.env.NYC_VENUE_TARGET_COUNT || 1000);
+const googleSearchConcurrency = Number(process.env.GOOGLE_SEARCH_CONCURRENCY || 6);
 const supportedCities = ["New York", "San Francisco", "Los Angeles"];
 const seedMembers = [
   {
@@ -193,33 +195,110 @@ async function googleTextSearch(query, city, options = {}) {
   return (data.places ?? []).map((place) => toVenue(place, city));
 }
 
-async function googleVenueSearches({ city, vibe, isNearby, lat, lng, radiusMeters }) {
+async function googleVenueSearches({ city, vibe, isNearby, lat, lng, radiusMeters, targetCount }) {
   const venueCity = isNearby ? "Near me" : city;
   const baseQuery = [vibe, "bars clubs nightlife", isNearby ? "near me" : city].filter(Boolean).join(" ");
   const normalizedCity = city.toLowerCase();
   const queries = normalizedCity.includes("new york") && !isNearby
-    ? [
-      baseQuery,
-      `best cocktail bars New York City`,
-      `nightclubs dance clubs New York City`,
-      `rooftop bars lounges New York City`,
-      `wine bars speakeasies New York City`,
-      `live music bars nightlife Brooklyn Manhattan`
-    ]
+    ? nycVenueQueries(vibe, targetCount)
     : [baseQuery];
 
   const seen = new Set();
   const venues = [];
-  for (const query of queries) {
-    const results = await googleTextSearch(query, venueCity, { lat, lng, radiusMeters });
-    for (const venue of results) {
-      const key = venue.googlePlaceId || venue.canonicalVenueKey || venue.id;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      venues.push(venue);
+  const concurrency = Math.max(1, Math.min(10, googleSearchConcurrency));
+  for (let index = 0; index < queries.length && venues.length < targetCount; index += concurrency) {
+    const batch = queries.slice(index, index + concurrency);
+    const batchResults = await Promise.all(batch.map(async (query) => {
+      try {
+        return await googleTextSearch(query, venueCity, { lat, lng, radiusMeters });
+      } catch (error) {
+        console.error(`Google Places query failed for "${query}"`, error);
+        return [];
+      }
+    }));
+
+    for (const results of batchResults) {
+      for (const venue of results) {
+        const key = venue.googlePlaceId || venue.canonicalVenueKey || venue.id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        venues.push(venue);
+        if (venues.length >= targetCount) break;
+      }
+      if (venues.length >= targetCount) break;
     }
   }
+
+  if (!venues.length) {
+    throw new Error("Google Places returned no venues");
+  }
+
   return venues;
+}
+
+function nycVenueQueries(vibe, targetCount) {
+  const neighborhoods = [
+    "Lower East Side", "East Village", "West Village", "Greenwich Village", "SoHo", "NoHo",
+    "Nolita", "Chinatown", "Tribeca", "Financial District", "Seaport", "Flatiron",
+    "Chelsea", "Meatpacking District", "Hell's Kitchen", "Midtown Manhattan", "Times Square",
+    "Upper East Side", "Upper West Side", "Harlem", "Washington Heights", "Williamsburg",
+    "Greenpoint", "Bushwick", "Bedford-Stuyvesant", "Crown Heights", "Fort Greene",
+    "Clinton Hill", "Downtown Brooklyn", "DUMBO", "Gowanus", "Park Slope", "Red Hook",
+    "Carroll Gardens", "Boerum Hill", "Cobble Hill", "Long Island City", "Astoria",
+    "Sunnyside", "Ridgewood", "Flushing", "Jackson Heights", "Forest Hills", "Jersey City",
+    "Hoboken"
+  ];
+  const categories = [
+    vibe || "nightlife",
+    "cocktail bars",
+    "neighborhood bars",
+    "wine bars",
+    "beer bars",
+    "dive bars",
+    "speakeasies",
+    "hotel bars",
+    "rooftop bars",
+    "lounges",
+    "nightclubs",
+    "dance clubs",
+    "music venues",
+    "jazz bars",
+    "karaoke bars",
+    "sports bars",
+    "gay bars",
+    "Latin clubs",
+    "sake bars",
+    "listening bars",
+    "pubs",
+    "tiki bars",
+    "comedy clubs with bars",
+    "late night bars"
+  ];
+  const citywide = [
+    "best bars New York City",
+    "best nightlife New York City",
+    "best cocktail bars New York City",
+    "best clubs New York City",
+    "best rooftop bars New York City",
+    "best lounges New York City",
+    "best speakeasies New York City",
+    "best bars Brooklyn",
+    "best nightlife Brooklyn",
+    "best bars Queens",
+    "best nightlife Queens",
+    "best bars Manhattan",
+    "best nightlife Manhattan"
+  ];
+  const queries = [...citywide];
+
+  for (const neighborhood of neighborhoods) {
+    for (const category of categories) {
+      queries.push(`${category} ${neighborhood} New York`);
+    }
+  }
+
+  const minimumQueries = Math.ceil((targetCount || nycVenueTargetCount) / 12);
+  return Array.from(new Set(queries)).slice(0, Math.max(minimumQueries, 240));
 }
 
 app.get("/api/venues", async (req, res) => {
@@ -230,6 +309,7 @@ app.get("/api/venues", async (req, res) => {
   const lng = optionalNumber(req.query.lng);
   const radiusMeters = Math.min(20000, Math.max(1000, optionalNumber(req.query.radiusMeters) || 5000));
   const isNearby = Number.isFinite(lat) && Number.isFinite(lng);
+  const targetCount = city.toLowerCase().includes("new york") && !isNearby ? nycVenueTargetCount : 20;
   const refresh = req.query.refresh === "true";
   const key = venueCacheKey(city, vibe, isNearby ? { lat, lng, radiusMeters } : null);
   const cached = venueCache[key];
@@ -258,7 +338,7 @@ app.get("/api/venues", async (req, res) => {
   if (googleKey) {
     try {
       const venueCity = isNearby ? "Near me" : city;
-      const venues = await googleVenueSearches({ city, vibe, isNearby, lat, lng, radiusMeters });
+      const venues = await googleVenueSearches({ city, vibe, isNearby, lat, lng, radiusMeters, targetCount });
       const fetchedAt = new Date().toISOString();
       const expiresAt = new Date(now + venueCacheTtlMs).toISOString();
       venueCache[key] = {
@@ -266,6 +346,7 @@ app.get("/api/venues", async (req, res) => {
         vibe,
         location: isNearby ? { lat, lng, radiusMeters } : null,
         source: "google",
+        targetCount,
         fetchedAt,
         expiresAt,
         venues
