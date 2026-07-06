@@ -15,10 +15,11 @@ test("loads venues and shows deployment status", async ({ page }) => {
 });
 
 test("records invites and unlocks social features", async ({ page }) => {
+  await page.getByRole("button", { name: "Friends" }).click();
   await page.getByRole("button", { name: "Check contacts" }).click();
   await expect(page.getByText("Contacts imported. Recommendations updated.")).toBeVisible();
   await expect(page.locator(".contact-row.active").filter({ hasText: "Maya Chen" })).toBeVisible();
-  await page.getByPlaceholder("friend@example.com").fill(`friend-${Date.now()}@example.com`);
+  await page.getByPlaceholder("friend@example.com or +1 555 0100").fill(`friend-${Date.now()}@example.com`);
   await page.locator(".invite-form").getByRole("button", { name: "Invite" }).click({ force: true });
   await expect(page.getByText("Invite recorded. Unlock progress updated.")).toBeVisible();
   await expect(page.getByText("Friend match scores").locator("..")).toContainText("Unlocked");
@@ -36,6 +37,7 @@ test("rates a venue and refreshes category scores", async ({ page }) => {
 test("builds and copies a night plan", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await expect(page.locator(".venue-card").first()).toBeVisible();
+  await page.getByRole("button", { name: "Plan" }).click();
   await page.getByRole("button", { name: "Build tonight" }).click();
   await expect(page.locator(".plan-stop")).toHaveCount(3);
   await page.getByRole("button", { name: "Copy plan" }).click();

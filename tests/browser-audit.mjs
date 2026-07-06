@@ -74,15 +74,17 @@ async function auditViewport(viewport, name) {
   }
 
   console.log(`browser-audit: ${name} invites`);
-  await page.fill('input[placeholder="friend@example.com"]', `${name}@example.com`);
+  await page.getByRole("button", { name: "Friends" }).click();
+  await page.fill('input[placeholder="friend@example.com or +1 555 0100"]', `${name}@example.com`);
   await page.click('button:has-text("Invite")');
   await page.waitForSelector("text=Invite recorded");
 
-  await page.fill('input[placeholder="friend@example.com"]', `${name}2@example.com`);
+  await page.fill('input[placeholder="friend@example.com or +1 555 0100"]', `${name}2@example.com`);
   await page.click('button:has-text("Invite")');
   await page.waitForSelector("text=Group planner");
 
   console.log(`browser-audit: ${name} rating`);
+  await page.getByRole("button", { name: "Spots" }).click();
   await page.click('.venue-card >> text=Rate');
   await page.waitForSelector('[role="dialog"]');
   await page.locator('[role="dialog"] textarea').fill(`Browser audit ${name}: useful crowd signal.`);
@@ -91,6 +93,7 @@ async function auditViewport(viewport, name) {
   await page.waitForSelector(`text=Browser audit ${name}: useful crowd signal.`);
 
   console.log(`browser-audit: ${name} planning`);
+  await page.getByRole("button", { name: "Plan" }).click();
   await page.locator('input[type="range"]').first().evaluate((input) => {
     input.value = "4";
     input.dispatchEvent(new Event("input", { bubbles: true }));

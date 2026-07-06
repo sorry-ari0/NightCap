@@ -1,5 +1,7 @@
-import React, { useEffect, useId, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { AlertCircle, Bookmark, CalendarClock, Copy, Database, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
 import "./styles.css";
 
@@ -71,6 +73,7 @@ function App() {
   const [cacheStatus, setCacheStatus] = useState("");
   const [userLocation, setUserLocation] = useState(null);
   const [nearMeLoading, setNearMeLoading] = useState(false);
+  const [activeView, setActiveView] = useState("spots");
   const [sessionId] = useState(getNightcapSession);
 
   async function apiFetch(path, options = {}) {
@@ -417,6 +420,12 @@ function App() {
   }, [venues]);
 
   const groupPlannerLocked = groupSize > 1 && (progress?.inviteCount ?? 0) < 2;
+  const appTabs = [
+    { id: "spots", label: "Spots", icon: Search },
+    { id: "friends", label: "Friends", icon: Users },
+    { id: "plan", label: "Plan", icon: SlidersHorizontal },
+    { id: "ranking", label: "Ranking", icon: Star }
+  ];
 
   return (
     <main className="app">
@@ -445,27 +454,17 @@ function App() {
         </div>
       </section>
 
-      <section className="controls" aria-label="Venue search">
-        <label>
-          <span>City</span>
-          <input className="city-freeform" value={city} onChange={(event) => setCity(event.target.value)} list="city-options" />
-          <datalist id="city-options">
-            {cityOptions.map((option) => <option key={option} value={option} />)}
-          </datalist>
-        </label>
-        <label>
-          <span>Search vibe</span>
-          <input value={vibe} onChange={(event) => setVibe(event.target.value)} placeholder="cocktail bars, clubs, rooftops" />
-        </label>
-        <button className="secondary" onClick={findNearMe} disabled={nearMeLoading || loading}>
-          <MapPin size={18} />
-          {nearMeLoading ? "Locating" : "Near me"}
-        </button>
-        <button className="primary" onClick={() => loadVenues()} disabled={loading}>
-          <Search size={18} />
-          {loading ? "Searching" : "Find spots"}
-        </button>
-      </section>
+      <nav className="app-tabs" aria-label="NightCap sections">
+        {appTabs.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button key={tab.id} className={activeView === tab.id ? "app-tab active" : "app-tab"} onClick={() => setActiveView(tab.id)}>
+              <Icon size={18} />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
       {(error || notice) && (
         <div className={error ? "banner error" : "banner"}>
@@ -474,13 +473,56 @@ function App() {
         </div>
       )}
 
-      <section className="status-bar">
-        <span>{health?.mapsConfigured ? "Maps connected" : "Maps key not set, using seed venues"}</span>
-        <span>Storage: {health?.storage ?? "checking"}</span>
-        <span>{cacheStatus === "hit" ? "Cached Places data" : source === "google" ? "Live Google Places results" : (fallbackReason || "Demo data active")}</span>
-      </section>
+      {activeView === "spots" && (
+        <>
+          <section className="controls" aria-label="Venue search">
+            <label>
+              <span>City</span>
+              <input className="city-freeform" value={city} onChange={(event) => setCity(event.target.value)} list="city-options" />
+              <datalist id="city-options">
+                {cityOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+            </label>
+            <label>
+              <span>Search vibe</span>
+              <input value={vibe} onChange={(event) => setVibe(event.target.value)} placeholder="cocktail bars, clubs, rooftops" />
+            </label>
+            <button className="secondary" onClick={findNearMe} disabled={nearMeLoading || loading}>
+              <MapPin size={18} />
+              {nearMeLoading ? "Locating" : "Near me"}
+            </button>
+            <button className="primary" onClick={() => loadVenues()} disabled={loading}>
+              <Search size={18} />
+              {loading ? "Searching" : "Find spots"}
+            </button>
+          </section>
 
-      <section className="onboarding">
+          <section className="status-bar">
+            <span>{health?.mapsConfigured ? "Maps connected" : "Maps key not set, using seed venues"}</span>
+            <span>Storage: {health?.storage ?? "checking"}</span>
+            <span>{cacheStatus === "hit" ? "Cached Places data" : source === "google" ? "Live Google Places results" : (fallbackReason || "Demo data active")}</span>
+          </section>
+
+          <section className="venues">
+            <div className="section-heading">
+              <CalendarClock size={18} />
+              <h2>{city} shortlist</h2>
+              <span className="source">{sourceLabel(source, cacheStatus)}</span>
+            </div>
+
+            <VenueMap mapData={mapData} venues={venues} />
+
+            <div className="venue-grid">
+              {venues.map((venue) => (
+                <VenueCard key={venue.id} venue={venue} onRate={setSelectedVenue} onSave={saveVenue} />
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+
+      {activeView === "friends" && (
+        <section className="onboarding">
         <div className="onboarding-copy">
           <p className="eyebrow">Crew unlocks</p>
           <h2>More friends, better plans.</h2>
@@ -488,8 +530,8 @@ function App() {
         </div>
         <form className="invite-form" onSubmit={submitInvite}>
           <label>
-            <span>Quick invite</span>
-            <input value={inviteContact} onChange={(event) => setInviteContact(event.target.value)} placeholder="friend@example.com" />
+            <span>Quick invite by phone or email</span>
+            <input value={inviteContact} onChange={(event) => setInviteContact(event.target.value)} placeholder="friend@example.com or +1 555 0100" />
           </label>
           <button className="primary" type="submit">
             <Send size={18} />
@@ -517,8 +559,10 @@ function App() {
           ))}
         </div>
       </section>
+      )}
 
-      <section className="ranking-section">
+      {activeView === "ranking" && (
+        <section className="ranking-section">
         <div className="ranking-copy">
           <p className="eyebrow">Public ranking</p>
           <h2>Your top spots become the growth loop.</h2>
@@ -579,8 +623,10 @@ function App() {
           </div>
         </div>
       </section>
+      )}
 
-      <section className="workspace">
+      {activeView === "plan" && (
+        <section className="workspace">
         <aside className="planner">
           <div className="section-heading planner-title">
             <SlidersHorizontal size={18} />
@@ -631,23 +677,8 @@ function App() {
             ))}
           </div>
         </aside>
-
-        <section className="venues">
-          <div className="section-heading">
-            <CalendarClock size={18} />
-            <h2>{city} shortlist</h2>
-            <span className="source">{sourceLabel(source, cacheStatus)}</span>
-          </div>
-
-          <VenueMap mapData={mapData} venues={venues} />
-
-          <div className="venue-grid">
-            {venues.map((venue) => (
-              <VenueCard key={venue.id} venue={venue} onRate={setSelectedVenue} onSave={saveVenue} />
-            ))}
-          </div>
-        </section>
       </section>
+      )}
 
       {selectedVenue && (
         <RatingModal
@@ -747,39 +778,63 @@ function buildMapData(venues) {
 
 function VenueMap({ mapData, venues }) {
   const [activeId, setActiveId] = useState(null);
+  const mapRef = useRef(null);
+  const mapNodeRef = useRef(null);
+  const markerLayerRef = useRef(null);
   const points = mapData?.points ?? [];
-  const bounds = mapData?.bounds;
   const activePoint = points.find((point) => point.id === activeId) || points[0];
   const venueById = new Map(venues.map((venue) => [venue.id, venue]));
 
-  function pointStyle(point) {
-    if (!bounds) return {};
-    const lngRange = bounds.east - bounds.west || 1;
-    const latRange = bounds.north - bounds.south || 1;
-    const left = ((point.lng - bounds.west) / lngRange) * 100;
-    const top = ((bounds.north - point.lat) / latRange) * 100;
-    return {
-      left: `${Math.min(94, Math.max(6, left))}%`,
-      top: `${Math.min(90, Math.max(10, top))}%`
+  useEffect(() => {
+    if (!mapNodeRef.current || mapRef.current) return;
+    mapRef.current = L.map(mapNodeRef.current, {
+      zoomControl: false,
+      scrollWheelZoom: false
+    }).setView([40.7128, -74.0060], 12);
+    L.control.zoom({ position: "bottomright" }).addTo(mapRef.current);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(mapRef.current);
+    markerLayerRef.current = L.layerGroup().addTo(mapRef.current);
+
+    return () => {
+      mapRef.current?.remove();
+      mapRef.current = null;
+      markerLayerRef.current = null;
     };
-  }
+  }, []);
+
+  useEffect(() => {
+    if (!mapRef.current || !markerLayerRef.current) return;
+    markerLayerRef.current.clearLayers();
+    const latLngs = [];
+    for (const point of points) {
+      const venue = venueById.get(point.id);
+      const latLng = L.latLng(point.lat, point.lng);
+      latLngs.push(latLng);
+      const marker = L.circleMarker(latLng, {
+        radius: point.id === activePoint?.id ? 9 : 7,
+        color: "#f8eef6",
+        weight: 2,
+        fillColor: point.id === activePoint?.id ? "#e86aa7" : "#b994ff",
+        fillOpacity: 0.92
+      });
+      marker.bindPopup(`<strong>${escapeHtml(point.name)}</strong><br>${escapeHtml(venue?.address || point.city || "NightCap venue")}`);
+      marker.on("click", () => setActiveId(point.id));
+      marker.addTo(markerLayerRef.current);
+    }
+
+    if (latLngs.length === 1) {
+      mapRef.current.setView(latLngs[0], 14);
+    } else if (latLngs.length > 1) {
+      mapRef.current.fitBounds(L.latLngBounds(latLngs), { padding: [28, 28], maxZoom: 14 });
+    }
+  }, [points, activePoint?.id, venues]);
 
   return (
     <div className="venue-map" aria-label="Stored venue map">
-      <div className="map-canvas">
-        <div className="map-grid" />
-        {points.map((point, index) => (
-          <button
-            className={point.id === activePoint?.id ? "map-pin active" : "map-pin"}
-            key={point.id}
-            style={pointStyle(point)}
-            onClick={() => setActiveId(point.id)}
-            title={point.name}
-          >
-            {index + 1}
-          </button>
-        ))}
-      </div>
+      <div className="map-canvas" ref={mapNodeRef} />
       <div className="map-side">
         <p className="eyebrow"><Database size={14} /> Cached map</p>
         <h3>{activePoint?.name || "No mapped venues yet"}</h3>
@@ -791,6 +846,14 @@ function VenueMap({ mapData, venues }) {
       </div>
     </div>
   );
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function PublicRankingPage({ handle, slug }) {

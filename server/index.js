@@ -179,7 +179,7 @@ async function googleTextSearch(query, city, options = {}) {
     },
     body: JSON.stringify({
       textQuery: query,
-      maxResultCount: 16,
+      maxResultCount: 20,
       ...(locationBias ? { locationBias } : {})
     })
   });
@@ -191,6 +191,35 @@ async function googleTextSearch(query, city, options = {}) {
 
   const data = await response.json();
   return (data.places ?? []).map((place) => toVenue(place, city));
+}
+
+async function googleVenueSearches({ city, vibe, isNearby, lat, lng, radiusMeters }) {
+  const venueCity = isNearby ? "Near me" : city;
+  const baseQuery = [vibe, "bars clubs nightlife", isNearby ? "near me" : city].filter(Boolean).join(" ");
+  const normalizedCity = city.toLowerCase();
+  const queries = normalizedCity.includes("new york") && !isNearby
+    ? [
+      baseQuery,
+      `best cocktail bars New York City`,
+      `nightclubs dance clubs New York City`,
+      `rooftop bars lounges New York City`,
+      `wine bars speakeasies New York City`,
+      `live music bars nightlife Brooklyn Manhattan`
+    ]
+    : [baseQuery];
+
+  const seen = new Set();
+  const venues = [];
+  for (const query of queries) {
+    const results = await googleTextSearch(query, venueCity, { lat, lng, radiusMeters });
+    for (const venue of results) {
+      const key = venue.googlePlaceId || venue.canonicalVenueKey || venue.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      venues.push(venue);
+    }
+  }
+  return venues;
 }
 
 app.get("/api/venues", async (req, res) => {
@@ -228,9 +257,8 @@ app.get("/api/venues", async (req, res) => {
 
   if (googleKey) {
     try {
-      const query = [vibe, "bars clubs nightlife", isNearby ? "near me" : city].filter(Boolean).join(" ");
       const venueCity = isNearby ? "Near me" : city;
-      const venues = await googleTextSearch(query, venueCity, { lat, lng, radiusMeters });
+      const venues = await googleVenueSearches({ city, vibe, isNearby, lat, lng, radiusMeters });
       const fetchedAt = new Date().toISOString();
       const expiresAt = new Date(now + venueCacheTtlMs).toISOString();
       venueCache[key] = {
