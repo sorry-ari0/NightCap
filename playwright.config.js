@@ -24,9 +24,9 @@ export default defineConfig({
     }
   },
   webServer: {
-    command: "NODE_ENV=test NIGHTCAP_DATA_PATH=.tmp/nightcap-e2e.json npm start",
+    command: "GOOGLE_MAPS_API_KEY= REQUIRE_GOOGLE_MAPS=false NODE_ENV=test NIGHTCAP_DATA_PATH=.tmp/nightcap-e2e.json npm start",
     url: "http://127.0.0.1:3001/api/health",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 15_000
   },
   projects: [

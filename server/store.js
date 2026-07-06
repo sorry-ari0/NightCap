@@ -9,7 +9,8 @@ const defaultState = {
   savedVenueIds: [],
   invites: [],
   sessions: {},
-  venueCache: {}
+  venueCache: {},
+  memberDirectory: []
 };
 
 export function loadState() {
@@ -21,7 +22,8 @@ export function loadState() {
       savedVenueIds: Array.isArray(parsed.savedVenueIds) ? parsed.savedVenueIds : [],
       invites: Array.isArray(parsed.invites) ? parsed.invites : [],
       sessions: parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {},
-      venueCache: parsed.venueCache && typeof parsed.venueCache === "object" ? parsed.venueCache : {}
+      venueCache: parsed.venueCache && typeof parsed.venueCache === "object" ? parsed.venueCache : {},
+      memberDirectory: Array.isArray(parsed.memberDirectory) ? parsed.memberDirectory : []
     };
   } catch (error) {
     console.error("Failed to load local data store", error);

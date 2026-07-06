@@ -15,8 +15,11 @@ test("loads venues and shows deployment status", async ({ page }) => {
 });
 
 test("records invites and unlocks social features", async ({ page }) => {
+  await page.getByRole("button", { name: "Check contacts" }).click();
+  await expect(page.getByText("Contacts imported. Recommendations updated.")).toBeVisible();
+  await expect(page.locator(".contact-row.active").filter({ hasText: "Maya Chen" })).toBeVisible();
   await page.getByPlaceholder("friend@example.com").fill(`friend-${Date.now()}@example.com`);
-  await page.getByRole("button", { name: "Invite" }).click({ force: true });
+  await page.locator(".invite-form").getByRole("button", { name: "Invite" }).click({ force: true });
   await expect(page.getByText("Invite recorded. Unlock progress updated.")).toBeVisible();
   await expect(page.getByText("Friend match scores").locator("..")).toContainText("Unlocked");
 });

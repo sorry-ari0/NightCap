@@ -9,7 +9,9 @@ const server = spawn("node", ["server/index.js"], {
     ...process.env,
     PORT: String(port),
     NODE_ENV: "test",
-    NIGHTCAP_DATA_PATH: ".tmp/nightcap-browser.json"
+    NIGHTCAP_DATA_PATH: ".tmp/nightcap-browser.json",
+    GOOGLE_MAPS_API_KEY: "",
+    REQUIRE_GOOGLE_MAPS: "false"
   },
   stdio: ["ignore", "pipe", "pipe"]
 });
@@ -63,7 +65,7 @@ async function auditViewport(viewport, name) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   console.log(`browser-audit: ${name} waiting for venues`);
   try {
-  await page.waitForSelector(".venue-card", { timeout: 20_000 });
+    await page.waitForSelector(".venue-card", { state: "attached", timeout: 20_000 });
   await page.waitForSelector(".venue-map", { timeout: 20_000 });
   } catch (error) {
     console.error(`browser-audit: ${name} body text\n${await page.locator("body").innerText().catch(() => "<unavailable>")}`);
@@ -83,7 +85,7 @@ async function auditViewport(viewport, name) {
   console.log(`browser-audit: ${name} rating`);
   await page.click('.venue-card >> text=Rate');
   await page.waitForSelector('[role="dialog"]');
-  await page.fill("textarea", `Browser audit ${name}: useful crowd signal.`);
+  await page.locator('[role="dialog"] textarea').fill(`Browser audit ${name}: useful crowd signal.`);
   await page.click('button:has-text("Save rating")');
   await page.waitForSelector('[role="dialog"]', { state: "detached" });
   await page.waitForSelector(`text=Browser audit ${name}: useful crowd signal.`);

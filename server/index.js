@@ -17,13 +17,37 @@ const state = loadState();
 const ratings = state.ratings;
 const sessions = state.sessions;
 const venueCache = state.venueCache;
+const memberDirectory = state.memberDirectory;
 const venueCacheTtlMs = Number(process.env.VENUE_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
 const supportedCities = ["New York", "San Francisco", "Los Angeles"];
+const seedMembers = [
+  {
+    id: "seed-member-maya",
+    name: "Maya Chen",
+    contacts: ["maya@example.com", "+14155550131"],
+    contactGraph: ["alex@example.com", "jordan@example.com", "+14155550141", "sofia@example.com"]
+  },
+  {
+    id: "seed-member-jordan",
+    name: "Jordan Lee",
+    contacts: ["jordan@example.com", "+12125550144"],
+    contactGraph: ["maya@example.com", "alex@example.com", "nina@example.com", "+12125550191"]
+  },
+  {
+    id: "seed-member-sofia",
+    name: "Sofia Rivera",
+    contacts: ["sofia@example.com", "+13105550119"],
+    contactGraph: ["maya@example.com", "nina@example.com", "cam@example.com", "+13105550122"]
+  }
+];
 
 function getSession(req) {
   const rawSessionId = String(req.get("x-nightcap-session") || "demo").trim();
   const sessionId = rawSessionId.slice(0, 80) || "demo";
   sessions[sessionId] ??= { savedVenueIds: [], invites: [] };
+  sessions[sessionId].savedVenueIds ??= [];
+  sessions[sessionId].invites ??= [];
+  sessions[sessionId].contacts ??= [];
   return {
     id: sessionId,
     data: sessions[sessionId]
@@ -44,7 +68,8 @@ function persist() {
     savedVenueIds: [],
     invites: [],
     sessions,
-    venueCache
+    venueCache,
+    memberDirectory
   });
 }
 
@@ -68,6 +93,7 @@ function toVenue(place, city) {
     userRatingCount: place.userRatingCount ?? null,
     priceLevel: place.priceLevel ?? null,
     openNow: place.regularOpeningHours?.openNow ?? null,
+    websiteUrl: place.websiteUri ?? null,
     source: "google",
     photoUrl: photoName && googleKey
       ? `/api/google-photo?name=${encodeURIComponent(photoName)}`
@@ -119,7 +145,18 @@ function withScores(venue, sessionData) {
   };
 }
 
-async function googleTextSearch(query, city) {
+async function googleTextSearch(query, city, options = {}) {
+  const locationBias = Number.isFinite(options.lat) && Number.isFinite(options.lng)
+    ? {
+      circle: {
+        center: {
+          latitude: options.lat,
+          longitude: options.lng
+        },
+        radius: options.radiusMeters || 5000
+      }
+    }
+    : undefined;
   const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
     headers: {
@@ -136,12 +173,14 @@ async function googleTextSearch(query, city) {
         "places.userRatingCount",
         "places.priceLevel",
         "places.regularOpeningHours",
+        "places.websiteUri",
         "places.photos"
       ].join(",")
     },
     body: JSON.stringify({
       textQuery: query,
-      maxResultCount: 16
+      maxResultCount: 16,
+      ...(locationBias ? { locationBias } : {})
     })
   });
 
@@ -158,8 +197,12 @@ app.get("/api/venues", async (req, res) => {
   const { data: sessionData } = getSession(req);
   const city = String(req.query.city || "New York").trim();
   const vibe = String(req.query.vibe || "").trim();
+  const lat = optionalNumber(req.query.lat);
+  const lng = optionalNumber(req.query.lng);
+  const radiusMeters = Math.min(20000, Math.max(1000, optionalNumber(req.query.radiusMeters) || 5000));
+  const isNearby = Number.isFinite(lat) && Number.isFinite(lng);
   const refresh = req.query.refresh === "true";
-  const key = venueCacheKey(city, vibe);
+  const key = venueCacheKey(city, vibe, isNearby ? { lat, lng, radiusMeters } : null);
   const cached = venueCache[key];
   const now = Date.now();
 
@@ -185,13 +228,15 @@ app.get("/api/venues", async (req, res) => {
 
   if (googleKey) {
     try {
-      const query = [vibe, "bars clubs nightlife", city].filter(Boolean).join(" ");
-      const venues = await googleTextSearch(query, city);
+      const query = [vibe, "bars clubs nightlife", isNearby ? "near me" : city].filter(Boolean).join(" ");
+      const venueCity = isNearby ? "Near me" : city;
+      const venues = await googleTextSearch(query, venueCity, { lat, lng, radiusMeters });
       const fetchedAt = new Date().toISOString();
       const expiresAt = new Date(now + venueCacheTtlMs).toISOString();
       venueCache[key] = {
-        city,
+        city: venueCity,
         vibe,
+        location: isNearby ? { lat, lng, radiusMeters } : null,
         source: "google",
         fetchedAt,
         expiresAt,
@@ -219,7 +264,7 @@ app.get("/api/venues", async (req, res) => {
     }
   }
 
-  const normalizedCity = city.toLowerCase();
+  const normalizedCity = (isNearby ? city : city).toLowerCase();
   const venues = fallbackVenues.filter((venue) => {
     return venue.city.toLowerCase().includes(normalizedCity) || normalizedCity.includes(venue.city.toLowerCase());
   });
@@ -335,18 +380,53 @@ app.get("/api/progress", (req, res) => {
   res.json(progressPayload(sessionId, sessionData));
 });
 
+app.get("/api/contacts", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  res.json(contactGraphPayload(sessionId, sessionData));
+});
+
+app.post("/api/contacts/import", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const parsedContacts = parseImportedContacts(req.body.contacts, req.body.raw);
+  if (!parsedContacts.length) {
+    return res.status(400).json({ error: "paste at least one email or phone contact" });
+  }
+
+  sessionData.contacts ??= [];
+  for (const contact of parsedContacts.slice(0, 500)) {
+    const existingIndex = sessionData.contacts.findIndex((item) => item.normalized === contact.normalized);
+    if (existingIndex >= 0) {
+      sessionData.contacts[existingIndex] = {
+        ...sessionData.contacts[existingIndex],
+        ...contact,
+        updatedAt: new Date().toISOString()
+      };
+    } else {
+      sessionData.contacts.push({
+        id: `contact-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        ...contact,
+        createdAt: new Date().toISOString()
+      });
+    }
+  }
+
+  persist();
+  res.status(201).json(contactGraphPayload(sessionId, sessionData));
+});
+
 app.post("/api/invites", (req, res) => {
   const { id: sessionId, data: sessionData } = getSession(req);
   const contact = String(req.body.contact || "").trim().slice(0, 120);
   if (!contact || !isValidInviteContact(contact)) return res.status(400).json({ error: "valid phone or email is required" });
 
-  const normalized = contact.toLowerCase();
+  const normalized = normalizeContact(contact);
   const existing = sessionData.invites.find((invite) => invite.normalized === normalized);
   if (!existing) {
     sessionData.invites.push({
       id: `invite-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       contact,
       normalized,
+      name: String(req.body.name || "").trim().slice(0, 80),
       status: "credited",
       joinedAt: new Date().toISOString(),
       creditedAt: new Date().toISOString(),
@@ -355,7 +435,10 @@ app.post("/api/invites", (req, res) => {
     persist();
   }
 
-  res.status(201).json(progressPayload(sessionId, sessionData));
+  res.status(201).json({
+    ...progressPayload(sessionId, sessionData),
+    contactGraph: contactGraphPayload(sessionId, sessionData)
+  });
 });
 
 app.post("/api/invites/:inviteId/accept", (req, res) => {
@@ -480,8 +563,11 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function venueCacheKey(city, vibe) {
-  return [city || "New York", vibe || "all"]
+function venueCacheKey(city, vibe, location) {
+  const locationPart = location
+    ? `near-${Math.round(location.lat * 100) / 100}-${Math.round(location.lng * 100) / 100}-${location.radiusMeters}`
+    : city || "New York";
+  return [locationPart, vibe || "all"]
     .map((part) => String(part).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""))
     .join("::");
 }
@@ -550,10 +636,12 @@ function reasonForVenue(venue, priorities, inviteCount) {
 
 function progressPayload(sessionId, sessionData) {
   const inviteCount = successfulInviteCount(sessionData);
+  const contacts = sessionData.contacts || [];
   return {
     sessionId,
     inviteCount,
     sentInviteCount: sessionData.invites.length,
+    contactCount: contacts.length,
     ratingCount: ratings.filter((rating) => rating.sessionId === sessionId).length,
     savedCount: sessionData.savedVenueIds.length,
     unlocks: unlocks.map((unlock) => ({
@@ -563,6 +651,117 @@ function progressPayload(sessionId, sessionData) {
     })),
     recentInvites: sessionData.invites.slice(-4).reverse()
   };
+}
+
+function contactGraphPayload(sessionId, sessionData) {
+  const contacts = sessionData.contacts || [];
+  const members = memberRecords(sessionId);
+  const memberByContact = new Map();
+  for (const member of members) {
+    for (const contact of member.normalizedContacts) {
+      memberByContact.set(contact, member);
+    }
+  }
+
+  const importedContacts = contacts.map((contact) => {
+    const member = memberByContact.get(contact.normalized);
+    const mutualMembers = members
+      .filter((item) => item.contactGraph.includes(contact.normalized))
+      .map((item) => ({ id: item.id, name: item.name }));
+    return {
+      id: contact.id,
+      name: contact.name,
+      contact: contact.contact,
+      normalized: contact.normalized,
+      onNightCap: Boolean(member),
+      memberId: member?.id || null,
+      memberName: member?.name || null,
+      mutualMembers
+    };
+  });
+
+  const onApp = importedContacts.filter((contact) => contact.onNightCap);
+  const inviteCandidates = importedContacts.filter((contact) => !contact.onNightCap);
+  const recommendations = inviteCandidates
+    .map((contact) => {
+      const alreadyInvited = (sessionData.invites || []).some((invite) => invite.normalized === contact.normalized);
+      return {
+        ...contact,
+        alreadyInvited,
+        score: contact.mutualMembers.length * 10 + (alreadyInvited ? -20 : 0)
+      };
+    })
+    .filter((contact) => contact.score > 0 || !contact.alreadyInvited)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, 8);
+
+  return {
+    importedCount: importedContacts.length,
+    onApp,
+    inviteCandidates,
+    recommendations,
+    appMemberCount: members.length,
+    unlocks: progressPayload(sessionId, sessionData).unlocks
+  };
+}
+
+function memberRecords(currentSessionId) {
+  const storedMembers = memberDirectory.map((member) => ({
+    id: member.id,
+    name: member.name,
+    contacts: member.contacts || [],
+    contactGraph: member.contactGraph || []
+  }));
+  const sessionMembers = Object.entries(sessions)
+    .filter(([sessionId]) => sessionId !== currentSessionId)
+    .map(([sessionId, sessionData]) => ({
+      id: `session-member-${sessionId}`,
+      name: sessionData.profile?.name || "NightCap member",
+      contacts: [
+        sessionData.profile?.email,
+        sessionData.profile?.phone,
+        ...(sessionData.invites || []).filter((invite) => invite.status === "credited").map((invite) => invite.contact)
+      ].filter(Boolean),
+      contactGraph: (sessionData.contacts || []).map((contact) => contact.normalized)
+    }));
+
+  return [...seedMembers, ...storedMembers, ...sessionMembers].map((member) => ({
+    ...member,
+    normalizedContacts: (member.contacts || []).map(normalizeContact).filter(Boolean),
+    contactGraph: (member.contactGraph || []).map(normalizeContact).filter(Boolean)
+  }));
+}
+
+function parseImportedContacts(contacts, raw) {
+  const structured = Array.isArray(contacts)
+    ? contacts.map((contact) => ({
+      name: String(contact.name || "").trim().slice(0, 80),
+      contact: String(contact.contact || contact.email || contact.phone || "").trim().slice(0, 120)
+    }))
+    : [];
+  const pasted = String(raw || "")
+    .split(/\n|,/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const email = line.match(/[^\s<>,;]+@[^\s<>,;]+\.[^\s<>,;]+/)?.[0];
+      const phone = line.match(/\+?[0-9][0-9().\-\s]{6,}[0-9]/)?.[0];
+      const contact = email || phone || "";
+      const name = contact ? line.replace(contact, "").replace(/[<>;,-]+/g, " ").trim() : line;
+      return { name: name.slice(0, 80), contact: contact.slice(0, 120) };
+    });
+
+  const deduped = new Map();
+  for (const contact of [...structured, ...pasted]) {
+    const normalized = normalizeContact(contact.contact);
+    if (!normalized || !isValidInviteContact(contact.contact)) continue;
+    deduped.set(normalized, {
+      name: contact.name || contact.contact,
+      contact: contact.contact,
+      normalized
+    });
+  }
+  return Array.from(deduped.values());
 }
 
 function rankingPayload(sessionId, sessionData) {
@@ -656,6 +855,14 @@ function escapeSvg(value) {
 
 function isValidInviteContact(contact) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact) || /^\+?[0-9().\-\s]{7,}$/.test(contact);
+}
+
+function normalizeContact(contact) {
+  const value = String(contact || "").trim();
+  if (!value) return "";
+  if (value.includes("@")) return value.toLowerCase();
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 7 ? digits : value.toLowerCase();
 }
 
 function canonicalVenueKey(name, city) {

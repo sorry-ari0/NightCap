@@ -59,6 +59,8 @@ function App() {
   const [plan, setPlan] = useState([]);
   const [progress, setProgress] = useState(null);
   const [inviteContact, setInviteContact] = useState("");
+  const [contactsRaw, setContactsRaw] = useState("Maya Chen <maya@example.com>\nAlex Kim <alex@example.com>\nNina Patel <nina@example.com>");
+  const [contactGraph, setContactGraph] = useState(null);
   const [health, setHealth] = useState(null);
   const [ranking, setRanking] = useState(null);
   const [shareCard, setShareCard] = useState(null);
@@ -67,6 +69,8 @@ function App() {
   const [fallbackReason, setFallbackReason] = useState("");
   const [mapData, setMapData] = useState({ points: [], bounds: null });
   const [cacheStatus, setCacheStatus] = useState("");
+  const [userLocation, setUserLocation] = useState(null);
+  const [nearMeLoading, setNearMeLoading] = useState(false);
   const [sessionId] = useState(getNightcapSession);
 
   async function apiFetch(path, options = {}) {
@@ -86,12 +90,17 @@ function App() {
     return data;
   }
 
-  async function loadVenues() {
+  async function loadVenues(locationOverride = userLocation) {
     setLoading(true);
     setError("");
     setNotice("");
     try {
       const params = new URLSearchParams({ city, vibe });
+      if (locationOverride) {
+        params.set("lat", String(locationOverride.lat));
+        params.set("lng", String(locationOverride.lng));
+        params.set("radiusMeters", String(locationOverride.radiusMeters || 5000));
+      }
       const data = await apiFetch(`/api/venues?${params}`);
       setVenues(data.venues);
       setSource(data.source);
@@ -113,6 +122,35 @@ function App() {
     }
   }
 
+  async function findNearMe() {
+    if (!navigator.geolocation) {
+      setError("Location is not available in this browser.");
+      return;
+    }
+    setNearMeLoading(true);
+    setError("");
+    setNotice("");
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const nextLocation = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          radiusMeters: 5000
+        };
+        setUserLocation(nextLocation);
+        setCity("Near me");
+        await loadVenues(nextLocation);
+        setNotice("Showing bars and clubs near your current location.");
+        setNearMeLoading(false);
+      },
+      (locationError) => {
+        setNearMeLoading(false);
+        setError(locationError.code === 1 ? "Location permission was denied." : "Could not get your current location.");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+    );
+  }
+
   async function loadProgress() {
     try {
       const data = await apiFetch("/api/progress", { timeout: 5000 });
@@ -128,6 +166,22 @@ function App() {
           { id: "city-scores", label: "City average scores", requiredInvites: 3, unlocked: false, remaining: 3 },
           { id: "stealth-mode", label: "Private mode", requiredInvites: 4, unlocked: false, remaining: 4 }
         ]
+      });
+    }
+  }
+
+  async function loadContacts() {
+    try {
+      const data = await apiFetch("/api/contacts", { timeout: 5000 });
+      setContactGraph(data);
+    } catch {
+      setContactGraph({
+        importedCount: 0,
+        onApp: [],
+        inviteCandidates: [],
+        recommendations: [],
+        appMemberCount: 0,
+        unlocks: []
       });
     }
   }
@@ -174,6 +228,7 @@ function App() {
     loadProgress();
     loadHealth();
     loadRanking();
+    loadContacts();
   }, []);
 
   async function saveVenue(venue) {
@@ -194,12 +249,18 @@ function App() {
   async function submitInvite(event) {
     event.preventDefault();
     if (!inviteContact.trim()) return;
+    await inviteFriend({ contact: inviteContact });
+  }
+
+  async function inviteFriend(friend) {
+    if (!friend?.contact?.trim()) return;
     try {
       const data = await apiFetch("/api/invites", {
         method: "POST",
-        body: JSON.stringify({ contact: inviteContact })
+        body: JSON.stringify({ contact: friend.contact, name: friend.name })
       });
       setProgress(data);
+      setContactGraph(data.contactGraph || contactGraph);
       await loadRanking();
       setInviteContact("");
       setError("");
@@ -223,6 +284,22 @@ function App() {
       setInviteContact("");
       setNotice("Invite recorded locally. API sync is unavailable.");
       setError("");
+    }
+  }
+
+  async function importContacts(event) {
+    event.preventDefault();
+    try {
+      const data = await apiFetch("/api/contacts/import", {
+        method: "POST",
+        body: JSON.stringify({ raw: contactsRaw })
+      });
+      setContactGraph(data);
+      setNotice("Contacts imported. Recommendations updated.");
+      setError("");
+    } catch (contactError) {
+      setNotice("");
+      setError(contactError.message);
     }
   }
 
@@ -380,7 +457,11 @@ function App() {
           <span>Search vibe</span>
           <input value={vibe} onChange={(event) => setVibe(event.target.value)} placeholder="cocktail bars, clubs, rooftops" />
         </label>
-        <button className="primary" onClick={loadVenues} disabled={loading}>
+        <button className="secondary" onClick={findNearMe} disabled={nearMeLoading || loading}>
+          <MapPin size={18} />
+          {nearMeLoading ? "Locating" : "Near me"}
+        </button>
+        <button className="primary" onClick={() => loadVenues()} disabled={loading}>
           <Search size={18} />
           {loading ? "Searching" : "Find spots"}
         </button>
@@ -403,11 +484,11 @@ function App() {
         <div className="onboarding-copy">
           <p className="eyebrow">Crew unlocks</p>
           <h2>More friends, better plans.</h2>
-          <p>Invite friends to unlock group planning, match scores, city averages, and private mode. Ratings keep working from the first visit.</p>
+          <p>Import contacts to see who already has NightCap, then invite recommended friends with mutual app contacts to unlock group planning, match scores, city averages, and private mode.</p>
         </div>
         <form className="invite-form" onSubmit={submitInvite}>
           <label>
-            <span>Invite by phone or email</span>
+            <span>Quick invite</span>
             <input value={inviteContact} onChange={(event) => setInviteContact(event.target.value)} placeholder="friend@example.com" />
           </label>
           <button className="primary" type="submit">
@@ -415,6 +496,17 @@ function App() {
             Invite
           </button>
         </form>
+        <form className="contacts-import" onSubmit={importContacts}>
+          <label>
+            <span>Paste contacts</span>
+            <textarea value={contactsRaw} onChange={(event) => setContactsRaw(event.target.value)} placeholder="Name <email@example.com> or phone, one per line" />
+          </label>
+          <button className="secondary full" type="submit">
+            <Users size={18} />
+            Check contacts
+          </button>
+        </form>
+        <ContactGraph graph={contactGraph} onInvite={inviteFriend} />
         <div className="unlock-grid">
           {(progress?.unlocks ?? []).map((unlock) => (
             <div className={unlock.unlocked ? "unlock-card active" : "unlock-card"} key={unlock.id}>
@@ -565,6 +657,54 @@ function App() {
         />
       )}
     </main>
+  );
+}
+
+function ContactGraph({ graph, onInvite }) {
+  const recommendations = graph?.recommendations ?? [];
+  const onApp = graph?.onApp ?? [];
+
+  return (
+    <div className="contact-graph">
+      <div className="contact-stat">
+        <strong>{graph?.importedCount ?? 0}</strong>
+        <span>contacts checked</span>
+      </div>
+      <div className="contact-stat">
+        <strong>{onApp.length}</strong>
+        <span>already on NightCap</span>
+      </div>
+      <div className="contact-stat">
+        <strong>{recommendations.length}</strong>
+        <span>recommended invites</span>
+      </div>
+
+      <div className="contact-list">
+        <h3>Already here</h3>
+        {(onApp.length ? onApp : []).slice(0, 4).map((friend) => (
+          <div className="contact-row active" key={friend.id}>
+            <span>{friend.name || friend.contact}</span>
+            <small>{friend.memberName || "NightCap member"}</small>
+          </div>
+        ))}
+        {!onApp.length && <p className="helper-text">Import contacts to find friends already on NightCap.</p>}
+      </div>
+
+      <div className="contact-list">
+        <h3>Invite next</h3>
+        {(recommendations.length ? recommendations : []).slice(0, 4).map((friend) => (
+          <div className="contact-row" key={friend.id}>
+            <span>{friend.name || friend.contact}</span>
+            <small>{friend.mutualMembers.length ? `${friend.mutualMembers.map((member) => member.name).join(", ")} also ${friend.mutualMembers.length === 1 ? "has" : "have"} NightCap` : "Not on NightCap yet"}</small>
+            <button className="secondary" type="button" onClick={() => onInvite(friend)} disabled={friend.alreadyInvited}>
+              <Send size={15} />
+              {friend.alreadyInvited ? "Sent" : "Invite"}
+            </button>
+          </div>
+        ))}
+        {!recommendations.length && <p className="helper-text">Recommendations will appear when imported friends share mutual NightCap contacts.</p>}
+      </div>
+    </div>
   );
 }
 
@@ -748,6 +888,12 @@ function VenueCard({ venue, onRate, onSave }) {
             <Star size={17} />
             Rate
           </button>
+          {venue.websiteUrl && (
+            <a className="secondary full link-button" href={venue.websiteUrl} target="_blank" rel="noreferrer">
+              <ExternalLink size={17} />
+              Website
+            </a>
+          )}
           <a className="secondary full link-button" href={mapsUrl} target="_blank" rel="noreferrer">
             <ExternalLink size={17} />
             Map
@@ -777,6 +923,14 @@ function RatingModal({ venue, onClose, onSubmit }) {
 
   function updateScore(key, value) {
     setOptionalScores((scores) => ({ ...scores, [`${key}Score`]: Number(value) }));
+  }
+
+  function resetScore(key) {
+    setOptionalScores((scores) => {
+      const nextScores = { ...scores };
+      delete nextScores[`${key}Score`];
+      return nextScores;
+    });
   }
 
   return (
@@ -817,10 +971,28 @@ function RatingModal({ venue, onClose, onSubmit }) {
 
         <div className="rating-grid">
           {categories.map((category, index) => (
-            <label key={category.key} className="range compact">
-              <span>{category.label}: {optionalScores[`${category.key}Score`] ?? "-"}</span>
-              <input id={`${titleId}-${index}`} aria-label={`${category.label} score`} type="range" min="1" max="10" step="0.1" onChange={(event) => updateScore(category.key, event.target.value)} />
-            </label>
+            <div key={category.key} className={optionalScores[`${category.key}Score`] === undefined ? "category-rating blank" : "category-rating"}>
+              <div className="category-rating-head">
+                <span>{category.label}</span>
+                {optionalScores[`${category.key}Score`] === undefined ? (
+                  <button type="button" className="secondary mini-button" onClick={() => updateScore(category.key, 7)}>
+                    Add
+                  </button>
+                ) : (
+                  <button type="button" className="secondary mini-button" onClick={() => resetScore(category.key)}>
+                    Reset
+                  </button>
+                )}
+              </div>
+              {optionalScores[`${category.key}Score`] === undefined ? (
+                <small>Not rated</small>
+              ) : (
+                <label className="range compact" htmlFor={`${titleId}-${index}`}>
+                  <span>{optionalScores[`${category.key}Score`]}</span>
+                  <input id={`${titleId}-${index}`} aria-label={`${category.label} score`} type="range" min="1" max="10" step="0.1" value={optionalScores[`${category.key}Score`]} onChange={(event) => updateScore(category.key, event.target.value)} />
+                </label>
+              )}
+            </div>
           ))}
         </div>
 

@@ -7,13 +7,16 @@ NightCap is a Beli-inspired nightlife planner MVP for bars, clubs, lounges, and 
 - Pulls bars and clubs from Google Places when `GOOGLE_MAPS_API_KEY` is configured.
 - Caches Google Places venue data locally by city and vibe so repeat searches use stored Maps data instead of spending quota.
 - Renders an in-app stored-location map from cached latitude/longitude points.
+- Supports Near Me search with browser geolocation, biased through Google Places when Maps is configured.
+- Stores official venue website URLs from Google Places and shows Website plus Map actions on venue cards.
 - Falls back to seeded venues so the MVP works immediately.
 - Lets users rate an overall venue score.
 - Supports optional category ratings for vibes, drinks, people, aesthetics, music, and value.
 - Supports comments and saved venues.
 - Generates a simple three-stop night-out plan from selected priorities and group size.
 - Persists local MVP data to `data/nightcap-db.json`.
-- Adds invite-based unlock progress for friend match scores, group planner, city scores, and private mode.
+- Adds contact import, friend recommendations, and invite-based unlock progress for friend match scores, group planner, city scores, and private mode.
+- Lets users leave category ratings blank unless they explicitly add a score for that category.
 
 ## Run Locally
 
@@ -43,6 +46,10 @@ VENUE_CACHE_TTL_MS=2592000000
 ```
 
 The current launch city order is New York, San Francisco, then Los Angeles. `/api/cities` returns that order plus any cached cities.
+
+## Contacts And App Path
+
+The web MVP cannot read a user's address book without native app permissions, so the current flow accepts pasted contacts and posts them to `/api/contacts/import`. The same endpoint is designed for a future iOS/Android app to populate after the user grants Contacts permission. The backend compares imported contacts with known NightCap members and recommends invites when a non-user has mutual contacts already on NightCap.
 
 For a real public deployment, also set:
 

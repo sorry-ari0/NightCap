@@ -10,7 +10,9 @@ const server = spawn("node", ["server/index.js"], {
     ...process.env,
     PORT: String(port),
     NODE_ENV: "test",
-    NIGHTCAP_DATA_PATH: ".tmp/nightcap-api.json"
+    NIGHTCAP_DATA_PATH: ".tmp/nightcap-api.json",
+    GOOGLE_MAPS_API_KEY: "",
+    REQUIRE_GOOGLE_MAPS: "false"
   },
   stdio: ["ignore", "pipe", "pipe"]
 });
@@ -27,6 +29,20 @@ try {
 
   const cities = await request("/api/cities");
   assert.deepEqual(cities.launchOrder, ["New York", "San Francisco", "Los Angeles"]);
+
+  const contacts = await request("/api/contacts/import", {
+    method: "POST",
+    body: {
+      raw: [
+        "Maya Chen <maya@example.com>",
+        "Alex Kim <alex@example.com>",
+        "Nina Patel <nina@example.com>"
+      ].join("\n")
+    }
+  });
+  assert.equal(contacts.importedCount, 3);
+  assert.equal(contacts.onApp.some((contact) => contact.memberName === "Maya Chen"), true);
+  assert.equal(contacts.recommendations.some((contact) => contact.normalized === "alex@example.com"), true);
 
   await assert.rejects(
     () => request("/api/ratings", {
@@ -54,6 +70,7 @@ try {
 
   const inviteOne = await request("/api/invites", { method: "POST", body: { contact: "friend1@example.com" } });
   assert.equal(inviteOne.inviteCount, 1);
+  assert.equal(Array.isArray(inviteOne.contactGraph.recommendations), true);
   const inviteTwo = await request("/api/invites", { method: "POST", body: { contact: "friend2@example.com" } });
   assert.equal(inviteTwo.inviteCount, 2);
 
