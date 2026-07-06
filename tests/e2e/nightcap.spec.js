@@ -61,18 +61,18 @@ test("saves account, feedback, password reset, and profile picture", async ({ pa
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgo=", "base64")
   });
-  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.locator(".account-form").getByRole("button", { name: "Sign up" }).click();
   await expect(page.getByText("Account saved.")).toBeVisible();
 
   await page.locator(".app-tabs").getByRole("button", { name: "Account" }).click();
   await page.getByPlaceholder("Tell us what broke, what felt off, or what should be better.").fill("Account flow audit feedback.");
-  await page.getByRole("button", { name: "Send feedback" }).click();
+  await page.locator(".feedback-form").getByRole("button", { name: "Send feedback" }).click();
   await expect(page.getByText("Feedback sent.")).toBeVisible();
 
   await page.getByPlaceholder("Email or phone").fill("+15550109999");
-  await page.getByRole("button", { name: "Send reset" }).click();
+  await page.locator(".password-form").first().getByRole("button", { name: "Send reset" }).click();
   await expect(page.getByText(/Reset code created|Reset link sent/)).toBeVisible();
   await page.locator(".password-form").last().getByPlaceholder("At least 8 characters").fill("nightcap-new-password");
-  await page.getByRole("button", { name: "Reset password" }).click();
+  await page.locator(".password-form").last().getByRole("button", { name: "Reset password" }).click();
   await expect(page.getByText("Password reset.")).toBeVisible();
 });
