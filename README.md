@@ -100,3 +100,7 @@ npm run release:check
 ```
 
 The command fails immediately when tracked or untracked files are not committed, then runs build, API validation, Playwright e2e, browser audit, and a final clean-tree check. This prevents NC-003-style releases where fixes exist locally but are not committed.
+
+## Agent Coordination
+
+Read `ORCHESTRATION.md` before assigning or accepting multi-agent work. `NightCap-Builder` is the global coordinator, lane agents must stay within their lane, and no agent should push, merge, deploy, publish externally, or run destructive git commands without explicit coordination.
