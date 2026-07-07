@@ -12,7 +12,9 @@
     "preview": "vite preview --host 0.0.0.0",
     "test:e2e": "playwright test",
     "test:api": "node tests/api-validation.mjs",
-    "test:browser": "node tests/browser-audit.mjs"
+    "test:browser": "node tests/browser-audit.mjs",
+    "check:clean": "node scripts/check-clean.mjs",
+    "release:check": "npm run check:clean && npm run build && npm run test:api && E2E_PORT=3107 npm run test:e2e && npm run test:browser && npm run check:clean"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.2",

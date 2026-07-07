@@ -90,3 +90,13 @@ Health check:
 ```sh
 curl http://localhost:3001/api/health
 ```
+
+## Release Check
+
+Run the release gate before pushing NightCap changes:
+
+```sh
+npm run release:check
+```
+
+The command fails immediately when tracked or untracked files are not committed, then runs build, API validation, Playwright e2e, browser audit, and a final clean-tree check. This prevents NC-003-style releases where fixes exist locally but are not committed.
