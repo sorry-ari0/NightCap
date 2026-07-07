@@ -1,7 +1,5 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
 import { AlertCircle, Bookmark, CalendarClock, Copy, Database, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, Users } from "lucide-react";
 import "./styles.css";
 
@@ -418,6 +416,7 @@ function App() {
   const topVenue = useMemo(() => {
     return [...venues].sort((a, b) => (b.overallScore ?? b.googleRating ?? 0) - (a.overallScore ?? a.googleRating ?? 0))[0];
   }, [venues]);
+  const savedVenues = useMemo(() => venues.filter((venue) => venue.saved), [venues]);
 
   const groupPlannerLocked = groupSize > 1 && (progress?.inviteCount ?? 0) < 2;
   const appTabs = [
@@ -511,6 +510,8 @@ function App() {
             </div>
 
             <VenueMap mapData={mapData} venues={venues} />
+
+            <SavedShortlist venues={savedVenues} onRate={setSelectedVenue} onSave={saveVenue} />
 
             <div className="venue-grid">
               {venues.map((venue) => (
@@ -739,6 +740,37 @@ function ContactGraph({ graph, onInvite }) {
   );
 }
 
+function SavedShortlist({ venues, onRate, onSave }) {
+  return (
+    <section className="saved-shortlist" aria-label="Saved shortlist">
+      <div>
+        <p className="eyebrow"><Bookmark size={14} /> Saved shortlist</p>
+        <h3>{venues.length ? `${venues.length} saved for later` : "Save spots to compare your night"}</h3>
+      </div>
+      <div className="saved-list">
+        {venues.length ? venues.map((venue) => (
+          <article className="saved-row" key={venue.id}>
+            <div>
+              <strong>{venue.name}</strong>
+              <span>{venue.neighborhood || venue.address || venue.city}</span>
+            </div>
+            <button className="secondary" type="button" onClick={() => onRate(venue)}>
+              <Star size={16} />
+              Rate
+            </button>
+            <button className="secondary" type="button" onClick={() => onSave(venue)}>
+              <Bookmark size={16} />
+              Remove
+            </button>
+          </article>
+        )) : (
+          <p className="helper-text">Tap the bookmark on any venue card to build a shortlist for tonight.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function sourceLabel(source, cacheStatus) {
   if (cacheStatus === "hit") return "Stored Maps data";
   if (source === "google-cache") return "Stored Maps data";
@@ -778,63 +810,31 @@ function buildMapData(venues) {
 
 function VenueMap({ mapData, venues }) {
   const [activeId, setActiveId] = useState(null);
-  const mapRef = useRef(null);
-  const mapNodeRef = useRef(null);
-  const markerLayerRef = useRef(null);
   const points = mapData?.points ?? [];
   const activePoint = points.find((point) => point.id === activeId) || points[0];
   const venueById = new Map(venues.map((venue) => [venue.id, venue]));
-
-  useEffect(() => {
-    if (!mapNodeRef.current || mapRef.current) return;
-    mapRef.current = L.map(mapNodeRef.current, {
-      zoomControl: false,
-      scrollWheelZoom: false
-    }).setView([40.7128, -74.0060], 12);
-    L.control.zoom({ position: "bottomright" }).addTo(mapRef.current);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-    }).addTo(mapRef.current);
-    markerLayerRef.current = L.layerGroup().addTo(mapRef.current);
-
-    return () => {
-      mapRef.current?.remove();
-      mapRef.current = null;
-      markerLayerRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!mapRef.current || !markerLayerRef.current) return;
-    markerLayerRef.current.clearLayers();
-    const latLngs = [];
-    for (const point of points) {
-      const venue = venueById.get(point.id);
-      const latLng = L.latLng(point.lat, point.lng);
-      latLngs.push(latLng);
-      const marker = L.circleMarker(latLng, {
-        radius: point.id === activePoint?.id ? 9 : 7,
-        color: "#f8eef6",
-        weight: 2,
-        fillColor: point.id === activePoint?.id ? "#e86aa7" : "#b994ff",
-        fillOpacity: 0.92
-      });
-      marker.bindPopup(`<strong>${escapeHtml(point.name)}</strong><br>${escapeHtml(venue?.address || point.city || "NightCap venue")}`);
-      marker.on("click", () => setActiveId(point.id));
-      marker.addTo(markerLayerRef.current);
-    }
-
-    if (latLngs.length === 1) {
-      mapRef.current.setView(latLngs[0], 14);
-    } else if (latLngs.length > 1) {
-      mapRef.current.fitBounds(L.latLngBounds(latLngs), { padding: [28, 28], maxZoom: 14 });
-    }
-  }, [points, activePoint?.id, venues]);
+  const bounds = mapData?.bounds || mapBounds(points);
 
   return (
     <div className="venue-map" aria-label="Stored venue map">
-      <div className="map-canvas" ref={mapNodeRef} />
+      <div className="map-canvas">
+        <div className="map-grid" />
+        {points.map((point, index) => {
+          const position = pointPosition(point, bounds);
+          return (
+            <button
+              key={point.id}
+              className={point.id === activePoint?.id ? "map-pin active" : "map-pin"}
+              style={{ left: `${position.x}%`, top: `${position.y}%` }}
+              onClick={() => setActiveId(point.id)}
+              aria-label={point.name}
+              type="button"
+            >
+              {index + 1}
+            </button>
+          );
+        })}
+      </div>
       <div className="map-side">
         <p className="eyebrow"><Database size={14} /> Cached map</p>
         <h3>{activePoint?.name || "No mapped venues yet"}</h3>
@@ -848,12 +848,26 @@ function VenueMap({ mapData, venues }) {
   );
 }
 
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function mapBounds(points) {
+  if (!points.length) return null;
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lng);
+  return {
+    north: Math.max(...lats),
+    south: Math.min(...lats),
+    east: Math.max(...lngs),
+    west: Math.min(...lngs)
+  };
+}
+
+function pointPosition(point, bounds) {
+  if (!bounds) return { x: 50, y: 50 };
+  const lngRange = Math.max(0.0001, bounds.east - bounds.west);
+  const latRange = Math.max(0.0001, bounds.north - bounds.south);
+  return {
+    x: Math.min(94, Math.max(6, ((point.lng - bounds.west) / lngRange) * 88 + 6)),
+    y: Math.min(94, Math.max(6, ((bounds.north - point.lat) / latRange) * 88 + 6))
+  };
 }
 
 function PublicRankingPage({ handle, slug }) {

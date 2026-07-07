@@ -633,9 +633,7 @@ app.post("/api/rankings/publish", (req, res) => {
 });
 
 app.get("/api/u/:handle/rankings/:slug", (req, res) => {
-  const match = Object.entries(sessions).find(([, sessionData]) => {
-    return sessionData.publicRanking?.slug === req.params.slug && sessionData.publicRanking?.publishedAt;
-  });
+  const match = publicRankingMatch(req.params.slug);
 
   if (!match) return res.status(404).json({ error: "public ranking not found" });
 
@@ -644,6 +642,15 @@ app.get("/api/u/:handle/rankings/:slug", (req, res) => {
     handle: req.params.handle,
     ...rankingPayload(sessionId, sessionData)
   });
+});
+
+app.get("/u/:handle/rankings/:slug", (req, res) => {
+  const match = publicRankingMatch(req.params.slug);
+  if (!match) return res.status(404).send("Public ranking not found");
+
+  const [sessionId, sessionData] = match;
+  const ranking = rankingPayload(sessionId, sessionData);
+  res.type("html").send(publicRankingHtml(req.params.handle, ranking));
 });
 
 app.post("/api/share-cards", (req, res) => {
@@ -920,6 +927,66 @@ function rankingPayload(sessionId, sessionData) {
   };
 }
 
+function publicRankingMatch(slug) {
+  return Object.entries(sessions).find(([, sessionData]) => {
+    return sessionData.publicRanking?.slug === slug && sessionData.publicRanking?.publishedAt;
+  });
+}
+
+function publicRankingHtml(handle, ranking) {
+  const rows = ranking.ranking.length
+    ? ranking.ranking.map((venue, index) => `
+      <article class="rank-row">
+        <span>${index + 1}</span>
+        <div>
+          <h2>${escapeHtml(venue.name)}</h2>
+          <p>${escapeHtml(venue.address || venue.city || "NightCap venue")}</p>
+          ${venue.comment ? `<small>${escapeHtml(venue.comment)}</small>` : ""}
+        </div>
+        <strong>${escapeHtml(venue.overallScore)}</strong>
+      </article>
+    `).join("")
+    : `<p class="empty">This ranking is public, but it needs a few ratings before the list fills in.</p>`;
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(handle)}'s NightCap Ranking</title>
+    <style>
+      :root { color: #f8eef6; background: #100b14; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #100b14; }
+      main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 18px 0 40px; }
+      .hero { min-height: 360px; display: flex; flex-direction: column; justify-content: flex-end; gap: 16px; padding: 42px; border: 1px solid rgba(255,244,251,.14); border-radius: 8px; background: linear-gradient(180deg, rgba(16,16,14,.28), rgba(16,16,14,.88)), linear-gradient(130deg, #120d17, #211827 56%, #2b1a2a); }
+      .eyebrow { margin: 0; color: #e86aa7; font-size: 12px; font-weight: 850; text-transform: uppercase; }
+      h1 { max-width: 820px; margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: clamp(42px, 7vw, 94px); line-height: .92; }
+      .lede { max-width: 680px; margin: 0; color: rgba(255,244,251,.78); font-size: 18px; line-height: 1.5; }
+      .board { display: grid; gap: 12px; margin-top: 16px; }
+      .rank-row { min-height: 116px; display: grid; grid-template-columns: 58px 1fr 72px; align-items: center; gap: 16px; padding: 18px; border: 1px solid rgba(255,244,251,.12); border-radius: 8px; background: #17111c; }
+      .rank-row > span, .rank-row > strong { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 8px; background: #f8eef6; color: #130d17; font-weight: 950; }
+      h2 { margin: 0 0 4px; font-size: 24px; }
+      p, small { color: rgba(255,244,251,.62); line-height: 1.4; }
+      .empty { padding: 18px; border: 1px solid rgba(255,244,251,.12); border-radius: 8px; background: #17111c; }
+      a { width: fit-content; display: inline-flex; margin-top: 14px; color: #e86aa7; font-weight: 850; text-decoration: none; }
+      @media (max-width: 560px) { .hero { min-height: 460px; padding: 24px; } .rank-row { grid-template-columns: 46px 1fr; } .rank-row > strong { grid-column: 2; width: fit-content; min-width: 54px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p class="eyebrow">NightCap public ranking</p>
+        <h1>${escapeHtml(handle)}'s nightlife ranking</h1>
+        <p class="lede">A public NightCap list unlocked through friends, ratings, and actual nightlife taste.</p>
+        <a href="/">Build your ranking</a>
+      </section>
+      <section class="board">${rows}</section>
+    </main>
+  </body>
+</html>`;
+}
+
 function successfulInviteCount(sessionData) {
   return (sessionData.invites || []).filter((invite) => {
     return !invite.status || invite.status === "credited";
@@ -956,6 +1023,14 @@ function shareCardPayload(ranking) {
 
 function escapeSvg(value) {
   return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
