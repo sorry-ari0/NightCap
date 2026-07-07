@@ -43,6 +43,47 @@ The scheduler should wake and/or message each orchestration agent every hour. Ea
 - Keep the repo clean or report exactly why it is dirty.
 - Do not overwrite or revert another agent's work.
 
+## Social Sentiment To Style Loop
+
+The Instagram/content lane and video editor lanes must maintain a feedback loop from social performance into style quality.
+
+### Content Lane Responsibilities
+
+The critique/content lane owns social signal collection. On each orchestration tick it should:
+
+1. Pull or refresh top-performing videos from approved integrations and authorized sources only.
+2. Capture performance signals such as views, likes, comments, shares, saves, retention indicators, caption themes, hook patterns, audio patterns, visual pacing, editing motifs, and creator/category context when available.
+3. Extract sentiment from comments and captions into concise tags: positive drivers, negative drivers, repeated audience language, and content fatigue signals.
+4. Identify the style features that appear to be driving performance.
+5. Produce a handoff summary for video-style-editor and video-editor-mp4-scout.
+
+If the integration is unavailable, rate-limited, or missing credentials, the content lane must report that blocker and create the smallest unblock task instead of inventing data.
+
+### Video Style Lane Responsibilities
+
+The video-style-editor lane owns turning social signal into styles. On each orchestration tick it should:
+
+1. Compare fresh social style signals against existing styles.
+2. Improve existing styles when the signal maps clearly to a known style.
+3. Propose a new style when the signal is repeated, materially different, and supported by multiple top-performing examples.
+4. Keep style changes small and reviewable: name, intent, source signal, editable parameters, and test clip behavior.
+5. Preserve prior styles unless the social evidence clearly shows they are stale or underperforming.
+
+### MP4/Media Lane Responsibilities
+
+The video-editor-mp4-scout lane owns media workflow verification. On each orchestration tick it should:
+
+1. Verify that updated or proposed styles can apply to real MP4 inputs.
+2. Check export behavior, preview behavior, and browser playback.
+3. Report any style that cannot be rendered or exported reliably.
+
+### Promotion Rules
+
+- A social signal may update an existing style after one strong top-performing example if the change is narrow and reversible.
+- A new style requires repeated evidence from at least three relevant high-performing examples or explicit user direction.
+- External posting/publishing stays dry-run only unless the user explicitly approves it.
+- Do not scrape or bypass platform restrictions. Use approved integrations, public pages, or user-provided exports.
+
 ## Verification Rules
 
 - Use Playwright/browser verification for user-facing web behavior.
