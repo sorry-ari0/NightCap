@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fallbackVenues } from "./fallbackVenues.js";
@@ -11,13 +12,16 @@ const requireGoogleMaps = process.env.REQUIRE_GOOGLE_MAPS === "true";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.join(__dirname, "..", "dist");
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "4mb" }));
 
 const state = loadState();
 const ratings = state.ratings;
 const sessions = state.sessions;
 const venueCache = state.venueCache;
 const memberDirectory = state.memberDirectory;
+const feedback = state.feedback;
+const posts = state.posts;
+const sentEmails = state.sentEmails;
 const venueCacheTtlMs = Number(process.env.VENUE_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
 const nycVenueTargetCount = Number(process.env.NYC_VENUE_TARGET_COUNT || 1000);
 const googleSearchConcurrency = Number(process.env.GOOGLE_SEARCH_CONCURRENCY || 6);
@@ -42,6 +46,8 @@ const seedMembers = [
     contactGraph: ["maya@example.com", "nina@example.com", "cam@example.com", "+13105550122"]
   }
 ];
+
+const passwordResetTtlMs = 1000 * 60 * 20;
 
 function getSession(req) {
   const rawSessionId = String(req.get("x-nightcap-session") || "demo").trim();
@@ -71,7 +77,10 @@ function persist() {
     invites: [],
     sessions,
     venueCache,
-    memberDirectory
+    memberDirectory,
+    feedback,
+    posts,
+    sentEmails
   });
 }
 
@@ -323,7 +332,7 @@ app.get("/api/venues", async (req, res) => {
   }
 
   if (!refresh && cached?.venues?.length && Date.parse(cached.expiresAt) > now) {
-    const venues = cached.venues.map((venue) => withScores(venue, sessionData));
+    const venues = rankVenuesForQuery(cached.venues, vibe, city).map((venue) => withScores(venue, sessionData));
     return res.json({
       source: "google-cache",
       cacheStatus: "hit",
@@ -377,7 +386,7 @@ app.get("/api/venues", async (req, res) => {
   const venues = fallbackVenues.filter((venue) => {
     return venue.city.toLowerCase().includes(normalizedCity) || normalizedCity.includes(venue.city.toLowerCase());
   });
-  const seedVenues = (venues.length ? venues : fallbackVenues).map((venue) => withScores(venue, sessionData));
+  const seedVenues = rankVenuesForQuery(venues.length ? venues : fallbackVenues, vibe, city).map((venue) => withScores(venue, sessionData));
 
   res.json({
     source: "seed",
@@ -401,12 +410,12 @@ app.get("/api/cities", (req, res) => {
 
 app.get("/api/health", (req, res) => {
   res.json({
-    ok: true,
-    mapsConfigured: Boolean(googleKey),
-    mapsRequired: requireGoogleMaps,
-    storage: "local-json",
-    venueCacheEntries: Object.keys(venueCache).length
+    ok: true
   });
+});
+
+app.get("/favicon.ico", (req, res) => {
+  res.status(204).end();
 });
 
 app.get("/api/google-photo", async (req, res) => {
@@ -414,7 +423,8 @@ app.get("/api/google-photo", async (req, res) => {
     return res.status(404).send("Photo unavailable");
   }
 
-  const url = `https://places.googleapis.com/v1/${req.query.name}/media?maxWidthPx=1200&key=${googleKey}`;
+  const width = Math.min(720, Math.max(240, optionalNumber(req.query.width) || 520));
+  const url = `https://places.googleapis.com/v1/${req.query.name}/media?maxWidthPx=${width}&key=${googleKey}`;
   const response = await fetch(url, { redirect: "manual" });
   const location = response.headers.get("location");
 
@@ -423,7 +433,7 @@ app.get("/api/google-photo", async (req, res) => {
 });
 
 app.post("/api/ratings", (req, res) => {
-  const { id: sessionId } = getSession(req);
+  const { id: sessionId, data: sessionData } = getSession(req);
   const overallScore = scoreValue(req.body.overallScore);
   const optionalScores = {
     vibesScore: scoreValue(req.body.vibesScore, true),
@@ -460,8 +470,45 @@ app.post("/api/ratings", (req, res) => {
   };
 
   ratings.push(rating);
+  const post = postFromRating(rating, sessionData);
+  posts.push(post);
   persist();
-  res.status(201).json({ rating });
+  res.status(201).json({ rating, post });
+});
+
+app.get("/api/posts", (req, res) => {
+  res.json({
+    posts: posts
+      .filter((post) => post.published)
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(0, 100)
+      .map(publicPost)
+  });
+});
+
+app.post("/api/posts/:postId/likes", (req, res) => {
+  const { id: sessionId } = getSession(req);
+  const post = posts.find((item) => item.id === req.params.postId);
+  if (!post || !post.published) return res.status(404).json({ error: "post not found" });
+  post.likes ??= [];
+  if (!post.likes.includes(sessionId)) post.likes.push(sessionId);
+  persist();
+  res.status(201).json({ post: publicPost(post) });
+});
+
+app.get("/api/people/search", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const successfulInvites = successfulInviteCount(sessionData);
+  if (successfulInvites < 3) {
+    return res.status(403).json({
+      error: `Invite ${3 - successfulInvites} more friend${3 - successfulInvites === 1 ? "" : "s"} to unlock people search.`,
+      inviteGate: inviteGatePayload(successfulInvites)
+    });
+  }
+
+  const query = String(req.query.q || "").trim().toLowerCase();
+  const people = topPeoplePayload(query);
+  res.json({ people, inviteGate: inviteGatePayload(successfulInvites) });
 });
 
 app.post("/api/saved-venues", (req, res) => {
@@ -487,6 +534,126 @@ app.delete("/api/saved-venues/:venueId", (req, res) => {
 app.get("/api/progress", (req, res) => {
   const { id: sessionId, data: sessionData } = getSession(req);
   res.json(progressPayload(sessionId, sessionData));
+});
+
+app.get("/api/profile", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  res.json(profilePayload(sessionId, sessionData));
+});
+
+app.post("/api/profile", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const name = String(req.body.name || "").trim().slice(0, 80);
+  const email = String(req.body.email || "").trim().slice(0, 120);
+  const phone = String(req.body.phone || "").trim().slice(0, 40);
+  const password = String(req.body.password || "");
+  const profilePhoto = sanitizeProfilePhoto(req.body.profilePhoto);
+
+  if (!name) return res.status(400).json({ error: "name is required" });
+  if (email && !isValidInviteContact(email)) return res.status(400).json({ error: "valid email is required" });
+  if (phone && !isValidInviteContact(phone)) return res.status(400).json({ error: "valid phone number is required" });
+  if (!email && !phone) return res.status(400).json({ error: "email or phone is required" });
+  if (!sessionData.profile && password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
+  if (password && password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
+
+  sessionData.profile = {
+    id: sessionData.profile?.id || `user-${sessionId}`,
+    name,
+    email,
+    phone,
+    normalizedEmail: email ? normalizeContact(email) : "",
+    normalizedPhone: phone ? normalizeContact(phone) : "",
+    profilePhoto: profilePhoto ?? sessionData.profile?.profilePhoto ?? "",
+    passwordHash: password ? hashPassword(password) : sessionData.profile?.passwordHash,
+    passwordUpdatedAt: password ? new Date().toISOString() : sessionData.profile?.passwordUpdatedAt,
+    createdAt: sessionData.profile?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  persist();
+  res.status(201).json(profilePayload(sessionId, sessionData));
+});
+
+app.post("/api/profile/photo", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  if (!sessionData.profile) return res.status(400).json({ error: "sign up before adding a profile picture" });
+  const profilePhoto = sanitizeProfilePhoto(req.body.profilePhoto);
+  if (!profilePhoto) return res.status(400).json({ error: "valid image is required" });
+  sessionData.profile.profilePhoto = profilePhoto;
+  sessionData.profile.updatedAt = new Date().toISOString();
+  persist();
+  res.json(profilePayload(sessionId, sessionData));
+});
+
+app.post("/api/password/reset-request", async (req, res) => {
+  getSession(req);
+  const email = String(req.body.email || req.body.contact || "").trim().slice(0, 120);
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "valid account email is required" });
+
+  const normalized = normalizeContact(email);
+  const match = findSessionByEmail(normalized);
+  const targetSessionData = match?.data;
+  if (!targetSessionData.profile) return res.status(404).json({ error: "no account found for that contact" });
+
+  const resetToken = crypto.randomBytes(18).toString("hex");
+  targetSessionData.passwordReset = {
+    token: resetToken,
+    email: normalized,
+    expiresAt: new Date(Date.now() + passwordResetTtlMs).toISOString(),
+    createdAt: new Date().toISOString()
+  };
+  try {
+    const emailDelivery = await passwordResetEmail(targetSessionData.profile.email, resetToken, targetSessionData.passwordReset.expiresAt);
+    sentEmails.push(emailDelivery);
+    persist();
+    res.status(201).json({
+      ok: true,
+      deliveryId: emailDelivery.id,
+      sentTo: targetSessionData.profile.email,
+      expiresAt: targetSessionData.passwordReset.expiresAt,
+      resetToken: process.env.NODE_ENV === "production" ? undefined : resetToken
+    });
+  } catch (error) {
+    delete targetSessionData.passwordReset;
+    console.error("Password reset email failed", error);
+    res.status(502).json({ error: "password reset email could not be sent" });
+  }
+});
+
+app.post("/api/password/reset", (req, res) => {
+  const token = String(req.body.token || "").trim();
+  const password = String(req.body.password || "");
+  if (!token) return res.status(400).json({ error: "reset token is required" });
+  if (password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
+
+  const match = Object.entries(sessions).find(([, sessionData]) => {
+    return sessionData.passwordReset?.token === token && Date.parse(sessionData.passwordReset.expiresAt) > Date.now();
+  });
+  if (!match) return res.status(400).json({ error: "reset link is invalid or expired" });
+
+  const [, sessionData] = match;
+  sessionData.profile.passwordHash = hashPassword(password);
+  sessionData.profile.passwordUpdatedAt = new Date().toISOString();
+  delete sessionData.passwordReset;
+  persist();
+  res.json({ ok: true });
+});
+
+app.post("/api/feedback", (req, res) => {
+  const { id: sessionId, data: sessionData } = getSession(req);
+  const message = String(req.body.message || "").trim().slice(0, 1500);
+  if (!message) return res.status(400).json({ error: "feedback message is required" });
+
+  const item = {
+    id: `feedback-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    sessionId,
+    profile: sessionData.profile || null,
+    message,
+    path: String(req.body.path || "").slice(0, 200),
+    createdAt: new Date().toISOString()
+  };
+  feedback.push(item);
+  persist();
+  res.status(201).json({ feedback: item });
 });
 
 app.get("/api/contacts", (req, res) => {
@@ -688,6 +855,45 @@ function venueCacheKey(city, vibe, location) {
     .join("::");
 }
 
+function rankVenuesForQuery(venues, query, city) {
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedCity = normalizeSearchText(city);
+  if (!normalizedQuery) return venues;
+
+  return [...venues]
+    .map((venue, index) => {
+      const name = normalizeSearchText(venue.name);
+      const address = normalizeSearchText(venue.address);
+      const neighborhood = normalizeSearchText(venue.neighborhood);
+      const venueCity = normalizeSearchText(venue.city);
+      const types = normalizeSearchText((venue.types || []).join(" "));
+      let score = 0;
+
+      if (name === normalizedQuery) score += 120;
+      if (name.includes(normalizedQuery)) score += 80;
+      if (normalizedQuery.includes(name) && name.length > 3) score += 60;
+      if (neighborhood.includes(normalizedQuery) || normalizedQuery.includes(neighborhood)) score += 48;
+      if (address.includes(normalizedQuery)) score += 38;
+      if (venueCity.includes(normalizedQuery) || normalizedQuery.includes(venueCity)) score += 28;
+      if (types.includes(normalizedQuery)) score += 12;
+      if (normalizedCity && venueCity.includes(normalizedCity)) score += 8;
+
+      return { venue, index, score };
+    })
+    .sort((a, b) => b.score - a.score || (b.venue.overallScore ?? b.venue.googleRating ?? 0) - (a.venue.overallScore ?? a.venue.googleRating ?? 0) || a.index - b.index)
+    .map((item) => item.venue);
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function mapPayload(venues) {
   const points = venues
     .map((venue) => ({
@@ -766,6 +972,187 @@ function progressPayload(sessionId, sessionData) {
       remaining: Math.max(0, unlock.requiredInvites - inviteCount)
     })),
     recentInvites: sessionData.invites.slice(-4).reverse()
+  };
+}
+
+function profilePayload(sessionId, sessionData) {
+  return {
+    sessionId,
+    signedIn: Boolean(sessionData.profile),
+    profile: publicProfile(sessionData.profile)
+  };
+}
+
+function postFromRating(rating, sessionData) {
+  const authorName = sessionData.profile?.name || "NightCap member";
+  return {
+    id: `post-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    sessionId: rating.sessionId,
+    author: {
+      name: authorName,
+      profilePhoto: sessionData.profile?.profilePhoto || ""
+    },
+    ratingId: rating.id,
+    venueId: rating.venueId,
+    venueName: rating.venueName,
+    venueAddress: rating.venueAddress,
+    venueCity: rating.venueCity,
+    overallScore: rating.overallScore,
+    comment: rating.comment,
+    likes: [],
+    published: true,
+    createdAt: rating.createdAt
+  };
+}
+
+function publicPost(post) {
+  return {
+    id: post.id,
+    author: post.author,
+    venueName: post.venueName,
+    venueAddress: post.venueAddress,
+    venueCity: post.venueCity,
+    overallScore: post.overallScore,
+    comment: post.comment,
+    likeCount: post.likes?.length || 0,
+    createdAt: post.createdAt
+  };
+}
+
+function inviteGatePayload(successfulInvites) {
+  return {
+    required: 3,
+    successfulInvites,
+    remaining: Math.max(0, 3 - successfulInvites),
+    unlocked: successfulInvites >= 3
+  };
+}
+
+function topPeoplePayload(query = "") {
+  const peopleBySession = new Map();
+  for (const post of posts.filter((item) => item.published)) {
+    const person = peopleBySession.get(post.sessionId) || {
+      id: post.sessionId,
+      name: post.author?.name || "NightCap member",
+      profilePhoto: post.author?.profilePhoto || "",
+      postCount: 0,
+      likeCount: 0,
+      averageScore: 0,
+      scoreTotal: 0,
+      topPost: null
+    };
+    person.postCount += 1;
+    person.likeCount += post.likes?.length || 0;
+    person.scoreTotal += post.overallScore || 0;
+    if (!person.topPost || (post.likes?.length || 0) > person.topPost.likeCount || post.overallScore > person.topPost.overallScore) {
+      person.topPost = {
+        venueName: post.venueName,
+        overallScore: post.overallScore,
+        likeCount: post.likes?.length || 0,
+        comment: post.comment
+      };
+    }
+    peopleBySession.set(post.sessionId, person);
+  }
+
+  return Array.from(peopleBySession.values())
+    .map((person) => ({
+      ...person,
+      averageScore: person.postCount ? Math.round((person.scoreTotal / person.postCount) * 10) / 10 : 0,
+      rankScore: Math.round((person.likeCount * 3 + person.postCount * 2 + (person.scoreTotal / Math.max(1, person.postCount))) * 10) / 10,
+      scoreTotal: undefined
+    }))
+    .filter((person) => {
+      if (!query) return true;
+      const haystack = [
+        person.name,
+        person.topPost?.venueName,
+        person.topPost?.comment
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    })
+    .sort((a, b) => b.rankScore - a.rankScore || b.likeCount - a.likeCount || b.postCount - a.postCount)
+    .slice(0, 20);
+}
+
+function publicProfile(profile) {
+  if (!profile) return null;
+  return {
+    id: profile.id,
+    name: profile.name,
+    email: profile.email,
+    phone: profile.phone,
+    profilePhoto: profile.profilePhoto || "",
+    hasPassword: Boolean(profile.passwordHash),
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt
+  };
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("hex");
+  return `pbkdf2_sha256$120000$${salt}$${hash}`;
+}
+
+function sanitizeProfilePhoto(value) {
+  if (value === undefined || value === null || value === "") return "";
+  const photo = String(value);
+  if (photo.length > 2_500_000) return null;
+  if (!/^data:image\/(png|jpe?g|webp);base64,[a-z0-9+/=]+$/i.test(photo)) return null;
+  return photo;
+}
+
+function findSessionByContact(normalizedContact) {
+  return Object.entries(sessions).map(([id, data]) => ({ id, data })).find(({ data }) => {
+    return data.profile?.normalizedEmail === normalizedContact || data.profile?.normalizedPhone === normalizedContact;
+  });
+}
+
+function findSessionByEmail(normalizedEmail) {
+  return Object.entries(sessions).map(([id, data]) => ({ id, data })).find(({ data }) => {
+    return data.profile?.normalizedEmail === normalizedEmail;
+  });
+}
+
+async function passwordResetEmail(email, resetToken, expiresAt) {
+  const delivery = {
+    id: `email-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    to: email,
+    subject: "Reset your NightCap password",
+    template: "password-reset",
+    expiresAt,
+    sentAt: new Date().toISOString(),
+    provider: process.env.EMAIL_PROVIDER || (process.env.RESEND_API_KEY ? "resend" : "local-json"),
+    status: "queued_local"
+  };
+
+  if (!process.env.RESEND_API_KEY) return delivery;
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: process.env.NIGHTCAP_EMAIL_FROM || "NightCap <onboarding@resend.dev>",
+      to: [email],
+      subject: delivery.subject,
+      text: `Use this code to reset your NightCap password: ${resetToken}\n\nThis code expires at ${expiresAt}.`,
+      html: `<p>Use this code to reset your NightCap password:</p><p><strong>${resetToken}</strong></p><p>This code expires at ${expiresAt}.</p>`
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.message || `Resend request failed with HTTP ${response.status}`);
+  }
+
+  return {
+    ...delivery,
+    provider: "resend",
+    providerId: data.id || null,
+    status: "sent"
   };
 }
 
@@ -882,6 +1269,7 @@ function parseImportedContacts(contacts, raw) {
 
 function rankingPayload(sessionId, sessionData) {
   const successfulInvites = successfulInviteCount(sessionData);
+  const inviteGate = inviteGatePayload(successfulInvites);
   const topVenues = ratings
     .filter((rating) => rating.sessionId === sessionId)
     .reduce((acc, rating) => {
@@ -914,16 +1302,12 @@ function rankingPayload(sessionId, sessionData) {
     slug,
     handle: "demo",
     shareUrl: published && slug ? `/u/demo/rankings/${slug}` : null,
-    shareText: ranking.length
+    shareText: inviteGate.unlocked && ranking.length
       ? `My NightCap nightlife ranking: ${ranking.slice(0, 3).map((venue, index) => `${index + 1}. ${venue.name}`).join(" / ")}`
       : "I’m building my NightCap nightlife ranking.",
-    inviteGate: {
-      required: 3,
-      successfulInvites,
-      remaining: Math.max(0, 3 - successfulInvites),
-      unlocked: successfulInvites >= 3
-    },
-    ranking
+    inviteGate,
+    rankingLocked: !inviteGate.unlocked,
+    ranking: inviteGate.unlocked ? ranking : []
   };
 }
 
@@ -1064,6 +1448,9 @@ if (process.env.NODE_ENV === "test") {
     ratings.splice(0, ratings.length);
     for (const key of Object.keys(sessions)) delete sessions[key];
     for (const key of Object.keys(venueCache)) delete venueCache[key];
+    feedback.splice(0, feedback.length);
+    posts.splice(0, posts.length);
+    sentEmails.splice(0, sentEmails.length);
     persist();
     res.json({ ok: true });
   });
