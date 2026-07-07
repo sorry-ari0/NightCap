@@ -1,7 +1,5 @@
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
 import { AlertCircle, Bookmark, CalendarClock, Copy, ExternalLink, Lock, MapPin, MessageSquare, Moon, Search, Send, SlidersHorizontal, Sparkles, Star, Unlock, UserRound, Users } from "lucide-react";
 import "./styles.css";
 
@@ -546,6 +544,7 @@ function App() {
   const topVenue = useMemo(() => {
     return [...venues].sort((a, b) => (b.overallScore ?? b.googleRating ?? 0) - (a.overallScore ?? a.googleRating ?? 0))[0];
   }, [venues]);
+  const savedVenues = useMemo(() => venues.filter((venue) => venue.saved), [venues]);
 
   const groupPlannerLocked = groupSize > 1 && (progress?.inviteCount ?? 0) < 2;
   const visibleVenueIdSet = useMemo(() => new Set(visibleMapVenueIds), [visibleMapVenueIds]);
@@ -666,6 +665,8 @@ function App() {
             </div>
 
             <VenueMap mapData={mapData} venues={venues} onVisibleVenuesChange={handleVisibleVenuesChange} />
+
+            <SavedShortlist venues={savedVenues} onRate={setSelectedVenue} onSave={saveVenue} />
 
             <div className="map-results-head">
               <strong>{mapVisibleVenues.length}</strong>
@@ -1097,6 +1098,37 @@ function ContactGraph({ graph, onInvite }) {
   );
 }
 
+function SavedShortlist({ venues, onRate, onSave }) {
+  return (
+    <section className="saved-shortlist" aria-label="Saved shortlist">
+      <div>
+        <p className="eyebrow"><Bookmark size={14} /> Saved shortlist</p>
+        <h3>{venues.length ? `${venues.length} saved for later` : "Save spots to compare your night"}</h3>
+      </div>
+      <div className="saved-list">
+        {venues.length ? venues.map((venue) => (
+          <article className="saved-row" key={venue.id}>
+            <div>
+              <strong>{venue.name}</strong>
+              <span>{venue.neighborhood || venue.address || venue.city}</span>
+            </div>
+            <button className="secondary" type="button" onClick={() => onRate(venue)}>
+              <Star size={16} />
+              Rate
+            </button>
+            <button className="secondary" type="button" onClick={() => onSave(venue)}>
+              <Bookmark size={16} />
+              Remove
+            </button>
+          </article>
+        )) : (
+          <p className="helper-text">Tap the bookmark on any venue card to build a shortlist for tonight.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function sourceLabel(source, cacheStatus) {
   if (cacheStatus === "hit" || source === "google-cache") return "Saved venue data";
   if (source === "google") return "Live venue data";
@@ -1136,215 +1168,23 @@ function buildMapData(venues) {
 function VenueMap({ mapData, venues, onVisibleVenuesChange }) {
   const [activeId, setActiveId] = useState(null);
   const [locationStatus, setLocationStatus] = useState("");
-  const userMarkerRef = useRef(null);
-  const mapRef = useRef(null);
-  const mapNodeRef = useRef(null);
-  const markerLayerRef = useRef(null);
   const points = mapData?.points ?? [];
   const activePoint = points.find((point) => point.id === activeId) || points[0];
   const venueById = new Map(venues.map((venue) => [venue.id, venue]));
+  const bounds = mapData?.bounds || mapBounds(points);
 
   useEffect(() => {
-    if (!mapNodeRef.current || mapRef.current) return;
-    mapRef.current = L.map(mapNodeRef.current, {
-      zoomControl: false,
-      scrollWheelZoom: true,
-      touchZoom: "center",
-      dragging: true,
-      tap: true,
-      bounceAtZoomLimits: false,
-      zoomSnap: 0.25
-    }).setView([40.7128, -74.0060], 12);
-    mapRef.current.touchZoom.enable();
-    mapRef.current.dragging.enable();
-    mapRef.current.scrollWheelZoom.enable();
-    mapNodeRef.current.__nightcapMap = mapRef.current;
-    mapNodeRef.current.__nightcapPinchMoves = 0;
-    const mapNode = mapNodeRef.current;
-    let pinchState = null;
-    const activePointers = new Map();
-    function keepPinchOnMap(event) {
-      if (event.touches?.length > 1) {
-        event.preventDefault();
-      }
-    }
-    function touchDistance(touches) {
-      const first = touches[0];
-      const second = touches[1];
-      return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
-    }
-    function touchCenter(touches) {
-      const first = touches[0];
-      const second = touches[1];
-      const rect = mapNode.getBoundingClientRect();
-      return L.point(((first.clientX + second.clientX) / 2) - rect.left, ((first.clientY + second.clientY) / 2) - rect.top);
-    }
-    function handlePinchStart(event) {
-      if (event.touches.length !== 2 || !mapRef.current) return;
-      pinchState = {
-        distance: touchDistance(event.touches),
-        zoom: mapRef.current.getZoom()
-      };
-    }
-    function handlePinchMove(event) {
-      if (event.touches.length !== 2 || !pinchState || !mapRef.current) return;
-      event.preventDefault();
-      const nextDistance = touchDistance(event.touches);
-      if (!pinchState.distance || !nextDistance) return;
-      const zoomDelta = Math.log2(nextDistance / pinchState.distance);
-      const nextZoom = Math.max(mapRef.current.getMinZoom(), Math.min(mapRef.current.getMaxZoom(), pinchState.zoom + zoomDelta));
-      mapNode.__nightcapPinchMoves += 1;
-      mapRef.current.setZoom(nextZoom, { animate: false });
-    }
-    function handlePinchEnd(event) {
-      if (event.touches.length < 2) pinchState = null;
-    }
-    function pointerDistance() {
-      const pointers = Array.from(activePointers.values());
-      if (pointers.length < 2) return 0;
-      return Math.hypot(pointers[1].clientX - pointers[0].clientX, pointers[1].clientY - pointers[0].clientY);
-    }
-    function pointerCenter() {
-      const pointers = Array.from(activePointers.values());
-      const rect = mapNode.getBoundingClientRect();
-      return L.point(((pointers[0].clientX + pointers[1].clientX) / 2) - rect.left, ((pointers[0].clientY + pointers[1].clientY) / 2) - rect.top);
-    }
-    function handlePointerDown(event) {
-      if (event.pointerType !== "touch") return;
-      activePointers.set(event.pointerId, event);
-      if (activePointers.size === 2 && mapRef.current) {
-        pinchState = {
-          distance: pointerDistance(),
-          zoom: mapRef.current.getZoom()
-        };
-      }
-    }
-    function handlePointerMove(event) {
-      if (event.pointerType !== "touch" || !activePointers.has(event.pointerId)) return;
-      activePointers.set(event.pointerId, event);
-      if (activePointers.size !== 2 || !pinchState || !mapRef.current) return;
-      event.preventDefault();
-      const nextDistance = pointerDistance();
-      if (!pinchState.distance || !nextDistance) return;
-      const zoomDelta = Math.log2(nextDistance / pinchState.distance);
-      const nextZoom = Math.max(mapRef.current.getMinZoom(), Math.min(mapRef.current.getMaxZoom(), pinchState.zoom + zoomDelta));
-      mapNode.__nightcapPinchMoves += 1;
-      mapRef.current.setZoom(nextZoom, { animate: false });
-    }
-    function handlePointerEnd(event) {
-      activePointers.delete(event.pointerId);
-      if (activePointers.size < 2) pinchState = null;
-    }
-    mapNode.addEventListener("touchmove", keepPinchOnMap, { passive: false });
-    mapNode.addEventListener("touchstart", handlePinchStart, { passive: true });
-    mapNode.addEventListener("touchmove", handlePinchMove, { passive: false });
-    mapNode.addEventListener("touchend", handlePinchEnd, { passive: true });
-    mapNode.addEventListener("touchcancel", handlePinchEnd, { passive: true });
-    mapNode.addEventListener("pointerdown", handlePointerDown, { passive: true });
-    mapNode.addEventListener("pointermove", handlePointerMove, { passive: false });
-    mapNode.addEventListener("pointerup", handlePointerEnd, { passive: true });
-    mapNode.addEventListener("pointercancel", handlePointerEnd, { passive: true });
-    L.control.zoom({ position: "bottomright" }).addTo(mapRef.current);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-    }).addTo(mapRef.current);
-    markerLayerRef.current = L.layerGroup().addTo(mapRef.current);
-
-    return () => {
-      mapNode.removeEventListener("touchmove", keepPinchOnMap);
-      mapNode.removeEventListener("touchstart", handlePinchStart);
-      mapNode.removeEventListener("touchmove", handlePinchMove);
-      mapNode.removeEventListener("touchend", handlePinchEnd);
-      mapNode.removeEventListener("touchcancel", handlePinchEnd);
-      mapNode.removeEventListener("pointerdown", handlePointerDown);
-      mapNode.removeEventListener("pointermove", handlePointerMove);
-      mapNode.removeEventListener("pointerup", handlePointerEnd);
-      mapNode.removeEventListener("pointercancel", handlePointerEnd);
-      delete mapNode.__nightcapMap;
-      mapRef.current?.remove();
-      mapRef.current = null;
-      markerLayerRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!mapRef.current || !markerLayerRef.current) return;
-    markerLayerRef.current.clearLayers();
-    for (const point of points) {
-      const venue = venueById.get(point.id);
-      const latLng = L.latLng(point.lat, point.lng);
-      const marker = L.circleMarker(latLng, {
-        radius: point.id === activePoint?.id ? 9 : 7,
-        color: "#f8eef6",
-        weight: 2,
-        fillColor: point.id === activePoint?.id ? "#e86aa7" : "#b994ff",
-        fillOpacity: 0.92
-      });
-      marker.bindPopup(`<strong>${escapeHtml(point.name)}</strong><br>${escapeHtml(venue?.address || point.city || "NightCap venue")}`);
-      marker.on("click", () => setActiveId(point.id));
-      marker.addTo(markerLayerRef.current);
-    }
-  }, [points, activePoint?.id, venues]);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    function updateVisibleVenues() {
-      if (!mapRef.current) return;
-      const bounds = mapRef.current.getBounds();
-      const visibleIds = points
-        .filter((point) => bounds.contains([point.lat, point.lng]))
-        .map((point) => point.id);
-      onVisibleVenuesChange(visibleIds);
-    }
-    mapRef.current.on("moveend zoomend", updateVisibleVenues);
-    setTimeout(updateVisibleVenues, 0);
-    return () => {
-      mapRef.current?.off("moveend zoomend", updateVisibleVenues);
-    };
-  }, [points, onVisibleVenuesChange]);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    const latLngs = denseMapLatLngs(points);
-    if (latLngs.length === 1) {
-      mapRef.current.setView(latLngs[0], 14);
-    } else if (latLngs.length > 1) {
-      setTimeout(() => {
-        mapRef.current?.invalidateSize();
-        mapRef.current?.fitBounds(L.latLngBounds(latLngs), { padding: [34, 34], maxZoom: 15 });
-        setTimeout(() => {
-          if (!mapRef.current) return;
-          const bounds = mapRef.current.getBounds();
-          onVisibleVenuesChange(points.filter((point) => bounds.contains([point.lat, point.lng])).map((point) => point.id));
-        }, 0);
-      }, 0);
-    }
+    onVisibleVenuesChange(points.map((point) => point.id));
   }, [points, onVisibleVenuesChange]);
 
   function centerToUserLocation() {
-    if (!navigator.geolocation || !mapRef.current) {
+    if (!navigator.geolocation) {
       setLocationStatus("Location unavailable");
       return;
     }
     setLocationStatus("Locating...");
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const latLng = L.latLng(position.coords.latitude, position.coords.longitude);
-        if (!userMarkerRef.current) {
-          userMarkerRef.current = L.circleMarker(latLng, {
-            radius: 8,
-            color: "#f8eef6",
-            weight: 2,
-            fillColor: "#e86aa7",
-            fillOpacity: 1
-          }).addTo(mapRef.current);
-        } else {
-          userMarkerRef.current.setLatLng(latLng);
-        }
-        mapRef.current.setView(latLng, 15, { animate: true });
-        setLocationStatus("Centered");
-      },
+      () => setLocationStatus("Location found"),
       () => setLocationStatus("Location blocked"),
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
     );
@@ -1352,7 +1192,24 @@ function VenueMap({ mapData, venues, onVisibleVenuesChange }) {
 
   return (
     <div className="venue-map" aria-label="Stored venue map">
-      <div className="map-canvas" ref={mapNodeRef} />
+      <div className="map-canvas">
+        <div className="map-grid" />
+        {points.map((point, index) => {
+          const position = pointPosition(point, bounds);
+          return (
+            <button
+              key={point.id}
+              className={point.id === activePoint?.id ? "map-pin active" : "map-pin"}
+              style={{ left: `${position.x}%`, top: `${position.y}%` }}
+              onClick={() => setActiveId(point.id)}
+              aria-label={point.name}
+              type="button"
+            >
+              {index + 1}
+            </button>
+          );
+        })}
+      </div>
       <div className="map-side">
         <p className="eyebrow"><MapPin size={14} /> Venue map</p>
         <h3>{activePoint?.name || "No mapped venues yet"}</h3>
@@ -1371,28 +1228,26 @@ function VenueMap({ mapData, venues, onVisibleVenuesChange }) {
   );
 }
 
-function denseMapLatLngs(points) {
-  const validPoints = points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
-  if (validPoints.length <= 30) return validPoints.map((point) => L.latLng(point.lat, point.lng));
-  const lats = validPoints.map((point) => point.lat).sort((a, b) => a - b);
-  const lngs = validPoints.map((point) => point.lng).sort((a, b) => a - b);
-  const lowIndex = Math.floor(validPoints.length * 0.05);
-  const highIndex = Math.ceil(validPoints.length * 0.95) - 1;
-  const south = lats[lowIndex];
-  const north = lats[highIndex];
-  const west = lngs[lowIndex];
-  const east = lngs[highIndex];
-  return validPoints
-    .filter((point) => point.lat >= south && point.lat <= north && point.lng >= west && point.lng <= east)
-    .map((point) => L.latLng(point.lat, point.lng));
+function mapBounds(points) {
+  if (!points.length) return null;
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lng);
+  return {
+    north: Math.max(...lats),
+    south: Math.min(...lats),
+    east: Math.max(...lngs),
+    west: Math.min(...lngs)
+  };
 }
 
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function pointPosition(point, bounds) {
+  if (!bounds) return { x: 50, y: 50 };
+  const lngRange = Math.max(0.0001, bounds.east - bounds.west);
+  const latRange = Math.max(0.0001, bounds.north - bounds.south);
+  return {
+    x: Math.min(94, Math.max(6, ((point.lng - bounds.west) / lngRange) * 88 + 6)),
+    y: Math.min(94, Math.max(6, ((bounds.north - point.lat) / latRange) * 88 + 6))
+  };
 }
 
 function PublicRankingPage({ handle, slug }) {
